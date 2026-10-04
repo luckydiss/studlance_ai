@@ -44,7 +44,7 @@
 | D18 | MVP: **два exe на ПК без Docker** — сервер (SQLite и папка на диске вместо Postgres и S3, за теми же интерфейсами) и воркер; агенты по подпискам. Прод: Postgres, S3, контейнеры, пул Windows-VM, агенты по API-ключам. Подробно — [PLAN.md](PLAN.md). |
 | D19 | Стек: **Go** (API + воркер), **React + Vite + TypeScript** (фронты), PostgreSQL, MinIO/S3, Caddy. |
 | D20 | **Превью листов в MVP:** у каждого документа комплекта есть PDF, воркер нарезает его на картинки страниц. Клиент видит работу прямо на сайте, админ сравнивает черновик и финал по листам. |
-| D21 | **Замечания к доработке привязаны к месту:** файл, страница, точка на листе и текст. Claude получает их вместе с вырезками страниц. |
+| D21 | **Замечания к доработке привязаны к месту:** файл, страница, выделенная область на листе и текст. Claude получает их вместе с вырезками страниц. |
 
 ## 2. Топология
 
@@ -336,7 +336,7 @@ RETURNING *;
 | `sessions` | `id_hash, user_id, created_at, expires_at, last_seen_at, user_agent, ip` |
 | `jobs` | `id, user_id, title, prompt, requirements[], status, stage, current_version, needs_attention, worker_id, lease_epoch, lease_expires_at, cancel_requested, attempt, state jsonb, error, created_at, updated_at, finished_at` |
 | `revisions` | `id, job_id, version (какую создаёт), comment, created_at, completed_at` |
-| `revision_remarks` | `id, revision_id, document, page, x, y (доли 0–1 от размеров листа), text` |
+| `revision_remarks` | `id, revision_id, document, page, x, y, w, h (выделенная область, доли 0–1 от размеров листа), text` |
 | `pages` | `file_id, page, image_key, thumb_key, width, height, changed_boxes jsonb` — превью страниц и рамки изменений |
 | `job_notes` | `id, job_id, author_id, text, created_at` — заметки админа |
 | `workers` | `id, name, token_hash, capabilities[], info jsonb, last_seen_at` |
