@@ -1,0 +1,39 @@
+# Data created at runtime
+/data/
+*.db
+*.db-shm
+*.db-wal
+
+# Build output
+/bin/
+/dist/
+*.exe
+
+# Go
+/vendor/
+
+# Node
+node_modules/
+web/**/dist/
+.pnpm-store/
+
+# Built frontends: only the placeholder stub is tracked so `go build`
+# works without Node. Real `pnpm -C web build` output stays untracked.
+/internal/web/dist/**
+!/internal/web/dist/.keep
+!/internal/web/dist/client/
+/internal/web/dist/client/**
+!/internal/web/dist/client/index.html
+!/internal/web/dist/admin/
+/internal/web/dist/admin/**
+!/internal/web/dist/admin/index.html
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local config with secrets
+worker.toml
+!worker.example.toml

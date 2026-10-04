@@ -1,0 +1,21 @@
+server_url = "http://127.0.0.1:8080"
+token = ""                        # выдаёт studlance-server worker token --name pc-1
+name = "pc-1"
+work_dir = 'C:\studlance\jobs'
+pdftoppm = 'C:\studlance\poppler\bin\pdftoppm.exe'
+
+[codex]
+command = "codex"
+args = []
+
+[claude]
+command = "claude"
+args = []
+
+[timeouts]
+stage = "3h"
+heartbeat = "15s"
+
+[capabilities]
+extra = []
+disable = []

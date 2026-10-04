@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "pr*"]
+  pull_request:
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+      - name: go mod download
+        run: go mod download
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8
+      - name: go test
+        run: go test -race ./...
+
+  generate-check:
+    name: Generate check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+      - name: install sqlc
+        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.28.0
+      - name: go generate
+        run: go generate ./...
+      - name: check diff
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::go generate produced changes; commit generated code";
+            git diff;
+            exit 1;
+          fi
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: install
+        run: pnpm -C web install --frozen-lockfile
+      - name: lint
+        run: pnpm -C web lint
+      - name: test
+        run: pnpm -C web test
+      - name: build
+        run: pnpm -C web build
+
+  build-windows:
+    name: Windows build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+      - name: build exe
+        run: go build -o bin/ ./cmd/server ./cmd/worker
+      - name: upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: studlance-windows
+          path: |
+            bin/studlance-server.exe
+            bin/studlance-worker.exe
