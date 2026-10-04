@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Комплект готов — замечание на листе</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&amp;family=PT+Serif:ital,wght@0,400;0,700;1,400&amp;family=PT+Sans:ital,wght@0,400;0,700;1,400&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#1F3A93}a:hover{color:#162C70}
+</style>
+</helmet>
+<div style="min-height: 900px; display: flex; flex-direction: column; background: #ECEDF0; color: #15171A; font-family: 'Golos Text', system-ui, sans-serif; font-size: 15px; line-height: 1.5;">
+  <header style="height: 56px; flex: none; background: #FFFFFF; border-bottom: 1px solid #E4E5E8; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 28px;">
+    <div style="display: flex; align-items: center; gap: 28px;">
+      <span style="font-weight: 700; font-size: 18px; letter-spacing: -0.02em;">studlance</span>
+      <nav style="display: flex; gap: 20px; font-size: 14px;"><a href="#" style="text-decoration: none; color: #15171A; font-weight: 500;">Мои заказы</a></nav>
+    </div>
+    <span style="width: 32px; height: 32px; border-radius: 50%; background: #E6E8EE; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600;">ИП</span>
+  </header>
+
+  <div style="background: #FFFFFF; border-bottom: 1px solid #E4E5E8; padding: 14px 28px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+    <div>
+      <div style="font-size: 13px; color: #686C73;">Заказ от 12 марта</div>
+      <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em;">Курсовая: расчёт и чертёж вала</h1>
+    </div>
+    <div style="display: flex; gap: 10px; align-items: center;">
+      <button type="button" style="display: inline-flex; align-items: center; gap: 6px; border: 1px solid #D9DBE0; background: #FFFFFF; font: inherit; font-size: 14px; padding: 9px 12px; border-radius: 10px; cursor: pointer;">Версия 1 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></button>
+      <a href="#" style="display: inline-flex; align-items: center; gap: 8px; background: #1F3A93; color: #FFFFFF; text-decoration: none; font-weight: 600; font-size: 14px; padding: 10px 16px; border-radius: 10px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"></path><path d="m7 10 5 5 5-5"></path><path d="M5 20h14"></path></svg>
+        Скачать всё
+      </a>
+    </div>
+  </div>
+
+  <div style="flex: 1; display: flex; flex-wrap: wrap; align-items: stretch;">
+    <nav aria-label="Документы комплекта" style="flex: 1 1 200px; max-width: 230px; background: #FFFFFF; border-right: 1px solid #E4E5E8; padding: 16px 12px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px;">
+      <a href="#" style="display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 10px; text-decoration: none; color: #15171A;">
+        <div style="width: 95px; height: 135px; overflow: hidden; box-shadow: 0 0 0 1px #E4E5E8;"><div style="width: 595px; height: 842px; transform: scale(0.16); transform-origin: 0 0;"><dc-import name="PageTitle" hint-size="595px,842px"></dc-import></div></div>
+        <div style="font-size: 14px; font-weight: 500;">Пояснительная записка <span style="color: #E8590C;">· 1</span></div>
+        <div style="font-size: 12px; color: #686C73;">Word · 38 стр.</div>
+      </a>
+      <a href="#" style="display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 10px; text-decoration: none; color: #15171A;">
+        <div style="width: 135px; height: 95px; overflow: hidden; box-shadow: 0 0 0 1px #E4E5E8;"><div style="width: 842px; height: 595px; transform: scale(0.16); transform-origin: 0 0;"><dc-import name="SheetCalc" hint-size="842px,595px"></dc-import></div></div>
+        <div style="font-size: 14px; font-weight: 500;">Расчёт вала</div>
+        <div style="font-size: 12px; color: #686C73;">Excel · 3 листа</div>
+      </a>
+      <a href="#" style="display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 10px; text-decoration: none; color: #15171A; background: #EEF1F8; box-shadow: inset 0 0 0 1.5px #1F3A93;">
+        <div style="width: 135px; height: 95px; overflow: hidden; box-shadow: 0 0 0 1px #E4E5E8;"><div style="width: 842px; height: 595px; transform: scale(0.16); transform-origin: 0 0;"><dc-import name="Drawing" hint-size="842px,595px"></dc-import></div></div>
+        <div style="font-size: 14px; font-weight: 500;">Чертёж вала <span style="color: #E8590C;">· 1</span></div>
+        <div style="font-size: 12px; color: #686C73;">КОМПАС-3D и PDF · А3</div>
+      </a>
+    </nav>
+
+    <main style="flex: 999 1 640px; min-width: 0; padding: 18px 24px 24px; display: flex; flex-direction: column; gap: 14px; align-items: center;">
+      <div style="width: 100%; max-width: 826px; display: flex; justify-content: space-between; gap: 12px; font-size: 13px; color: #686C73; flex-wrap: wrap;">
+        <span>Чертёж вала · лист 1 из 1</span>
+        <span>Нажмите на лист, чтобы оставить замечание в этом месте</span>
+      </div>
+      <div style="position: relative; width: 826px; height: 583px; flex: none; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 12px 32px rgba(21, 23, 26, 0.12);">
+        <div style="width: 842px; height: 595px; transform: scale(0.98); transform-origin: 0 0;"><dc-import name="Drawing" hint-size="842px,595px"></dc-import></div>
+        <span style="position: absolute; left: 786px; top: 503px; width: 26px; height: 26px; border-radius: 50% 50% 50% 0; background: #E8590C; color: #FFFFFF; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(232, 89, 12, 0.4);">1</span>
+        <div style="position: absolute; left: 470px; top: 330px; width: 290px; background: #FFFFFF; border-radius: 12px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08), 0 14px 36px rgba(21, 23, 26, 0.20); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;">
+          <div style="font-size: 12px; color: #686C73;">Вы · только что</div>
+          <div style="font-size: 14px;">Масштаб должен быть 1:2, а не 1:1 — так в задании, пункт 4.</div>
+          <div style="display: flex; gap: 12px; font-size: 13px;"><a href="#" style="text-decoration: none;">Изменить</a><a href="#" style="text-decoration: none; color: #686C73;">Удалить</a></div>
+        </div>
+      </div>
+    </main>
+
+    <aside style="flex: 1 1 280px; max-width: 320px; background: #FFFFFF; border-left: 1px solid #E4E5E8; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px;">
+      <div style="font-weight: 600; font-size: 16px;">Замечания к версии 1</div>
+      <div style="display: flex; gap: 12px;">
+        <span style="width: 22px; height: 22px; flex: none; border-radius: 50% 50% 50% 0; background: #E8590C; color: #FFFFFF; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center;">1</span>
+        <div><div style="font-size: 13px; color: #686C73;">Чертёж вала · основная надпись</div><div style="font-size: 14px;">Масштаб должен быть 1:2, а не 1:1 — так в задании, пункт 4.</div></div>
+      </div>
+      <div style="display: flex; gap: 12px;">
+        <span style="width: 22px; height: 22px; flex: none; border-radius: 50% 50% 50% 0; background: #E8590C; color: #FFFFFF; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center;">2</span>
+        <div><div style="font-size: 13px; color: #686C73;">Пояснительная записка · стр. 15</div><div style="font-size: 14px;">Добавьте в раздел 4 проверку вала на выносливость по пределу текучести.</div></div>
+      </div>
+      <button type="button" style="border: 0; background: #1F3A93; color: #FFFFFF; font: inherit; font-weight: 600; padding: 11px 16px; border-radius: 10px; cursor: pointer;">Отправить на доработку</button>
+      <p style="margin: 0; font-size: 13px; color: #686C73;">Все замечания уйдут вместе. Исправленный комплект появится здесь как версия 2.</p>
+      <div style="margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 12px; background: #F6F7F8; font-size: 14px;">
+        <span style="width: 9px; height: 9px; border-radius: 50%; background: #2B8A3E;"></span>
+        <span style="flex: 1;">Готово · версия 1</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#686C73" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"></path></svg>
+      </div>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

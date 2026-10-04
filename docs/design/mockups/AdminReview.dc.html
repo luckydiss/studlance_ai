@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Пульт — разбор заказа</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;family=PT+Sans:ital,wght@0,400;0,700;1,400&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#1F3A93}a:hover{color:#162C70}
+</style>
+</helmet>
+<div style="min-height: 940px; display: flex; flex-direction: column; background: #ECEDF0; color: #15171A; font-family: 'Golos Text', system-ui, sans-serif; font-size: 14px; line-height: 1.5;">
+  <header style="height: 52px; flex: none; background: #15171A; color: #FFFFFF; display: flex; align-items: center; gap: 28px; padding: 0 24px; flex-wrap: wrap;">
+    <span style="font-weight: 700; font-size: 17px; letter-spacing: -0.02em;">studlance <span style="font-weight: 400; color: #9A9DA3;">пульт</span></span>
+    <nav style="display: flex; gap: 18px; font-size: 14px; flex-wrap: wrap;">
+      <a href="#" style="color: #FFFFFF; text-decoration: none; font-weight: 600;">Заказы</a>
+      <a href="#" style="color: #9A9DA3; text-decoration: none;">Клиенты</a>
+      <a href="#" style="color: #9A9DA3; text-decoration: none;">Воркеры</a>
+      <a href="#" style="color: #9A9DA3; text-decoration: none;">Метрики</a>
+    </nav>
+  </header>
+
+  <div style="background: #FFFFFF; border-bottom: 1px solid #E4E5E8; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <h1 style="margin: 0; font-size: 20px; font-weight: 600;">Курсовая: расчёт и чертёж вала</h1>
+      <div style="font-size: 13px; color: #686C73;">Иван Петров · заказ 0142 · воркер home-pc · 1 ч 09 мин</div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+      <span style="display: inline-flex; align-items: center; gap: 8px; font-weight: 500;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #C2551F;"></span>Проверка · claude</span>
+      <button type="button" style="border: 1px solid #D9DBE0; background: #FFFFFF; font: inherit; padding: 8px 12px; border-radius: 8px; cursor: pointer;">Повторить этап</button>
+      <button type="button" style="border: 0; background: transparent; color: #C92A2A; font: inherit; padding: 8px; cursor: pointer;">Отменить</button>
+    </div>
+  </div>
+
+  <div style="flex: 1; display: flex; flex-wrap: wrap; align-items: stretch;">
+    <section aria-label="Действия агентов" style="flex: 1 1 320px; max-width: 360px; background: #FFFFFF; border-right: 1px solid #E4E5E8; box-sizing: border-box; display: flex; flex-direction: column;">
+      <button type="button" style="display: flex; align-items: center; gap: 8px; border: 0; border-bottom: 1px solid #EEEFF1; background: transparent; font: inherit; color: #15171A; padding: 12px 16px; text-align: left; cursor: pointer;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A9DA3" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"></path></svg>
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: #0F7B6C;"></span>
+        <span style="font-weight: 600;">Черновик · codex</span>
+        <span style="margin-left: auto; color: #9A9DA3; font-size: 13px;">48 мин · 64 шага</span>
+      </button>
+      <div style="display: flex; align-items: center; gap: 8px; padding: 12px 16px 6px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A9DA3" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: #C2551F;"></span>
+        <span style="font-weight: 600;">Проверка · claude</span>
+        <span style="margin-left: auto; color: #9A9DA3; font-size: 13px;">21 мин · 31 шаг</span>
+      </div>
+      <ol style="list-style: none; margin: 0; padding: 0 8px 12px; display: flex; flex-direction: column; font-size: 13px;">
+        <li style="display: flex; gap: 10px; padding: 7px 8px;"><span style="color: #9A9DA3; width: 38px; flex: none;">14:52</span><span>Сверяет требования методички, раздел 3.2</span></li>
+        <li style="display: flex; gap: 10px; padding: 7px 8px;"><span style="color: #9A9DA3; width: 38px; flex: none;">14:53</span><span style="display: flex; flex-direction: column; gap: 4px; min-width: 0;"><span>Пересчитал расчёт скриптом</span><code style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #4A4E55; background: #F4F5F7; border-radius: 6px; padding: 4px 6px;">Kσ сеч. 3: 1.92 → табл. 7: 2.05</code></span></li>
+        <li style="display: flex; gap: 10px; padding: 7px 8px;"><span style="color: #9A9DA3; width: 38px; flex: none;">14:55</span><span><span style="color: #C92A2A; font-weight: 600;">Нашёл</span> Kσ на участке 3 взят не из той таблицы</span></li>
+        <li style="display: flex; gap: 10px; padding: 7px 8px;"><span style="color: #9A9DA3; width: 38px; flex: none;">14:56</span><span><span style="color: #2B8A3E; font-weight: 600;">Исправил</span> Расчёт вала · лист «Усталость»</span></li>
+        <li style="display: flex; gap: 10px; padding: 7px 8px;"><span style="color: #9A9DA3; width: 38px; flex: none;">14:58</span><span style="color: #686C73;">Искал ГОСТ 2.307-2011, нанесение размеров</span></li>
+        <li style="display: flex; gap: 10px; padding: 7px 8px; background: #FFF1E6; border-radius: 8px;"><span style="color: #9A9DA3; width: 38px; flex: none;">15:01</span><span><span style="color: #2B8A3E; font-weight: 600;">Исправил</span> Чертёж вала · посадка ⌀40k6 и шероховатость Ra 0,8</span></li>
+        <li style="display: flex; gap: 10px; padding: 7px 8px;"><span style="color: #9A9DA3; width: 38px; flex: none;">15:03</span><span style="color: #1F3A93;">Экспортирует чертёж в PDF…</span></li>
+      </ol>
+    </section>
+
+    <main style="flex: 999 1 560px; min-width: 0; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 14px; align-items: center;">
+      <div style="width: 100%; max-width: 708px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <div style="display: flex; background: #DCDEE3; border-radius: 8px; padding: 3px; font-size: 13px;">
+          <span style="padding: 4px 12px; border-radius: 6px; color: #4A4E55;">Черновик</span>
+          <span style="padding: 4px 12px; border-radius: 6px; background: #FFFFFF; font-weight: 600;">Финал</span>
+        </div>
+        <div style="display: flex; gap: 14px; font-size: 13px; color: #686C73;">
+          <span>Записка</span><span>Расчёт <span style="color: #2B8A3E;">●</span></span><span style="color: #15171A; font-weight: 600; text-decoration: underline;">Чертёж <span style="color: #2B8A3E;">●</span></span>
+        </div>
+      </div>
+      <div style="position: relative; width: 708px; height: 500px; flex: none; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 12px 32px rgba(21, 23, 26, 0.12);">
+        <div style="width: 842px; height: 595px; transform: scale(0.84); transform-origin: 0 0;"><dc-import name="Drawing" hint-size="842px,595px"></dc-import></div>
+        <div style="position: absolute; left: 318px; top: 104px; width: 96px; height: 76px; border: 2px solid #2B8A3E; border-radius: 6px; background: rgba(43, 138, 62, 0.08);"></div>
+        <span style="position: absolute; left: 318px; top: 80px; background: #2B8A3E; color: #FFFFFF; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 6px;">изменено · 15:01</span>
+      </div>
+      <div style="width: 100%; max-width: 708px; font-size: 13px; color: #686C73;">В черновике codex здесь стояла посадка ⌀40h7 — не совпадала с расчётом посадки колеса на вал.</div>
+    </main>
+
+    <aside style="flex: 1 1 280px; max-width: 320px; background: #FFFFFF; border-left: 1px solid #E4E5E8; padding: 18px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px;">
+      <div style="display: flex; justify-content: space-between; align-items: baseline;"><span style="font-weight: 600; font-size: 15px;">Ведомость замечаний</span><span style="font-size: 13px; color: #686C73;">3 из 4 исправлено</span></div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="padding: 10px; border-radius: 8px;"><div style="font-size: 13px; color: #686C73;">Расчёт · лист «Усталость»</div><div>Kσ на участке 3 взят не из той таблицы</div><div style="font-size: 12px; color: #2B8A3E; font-weight: 600;">исправлено</div></div>
+        <div style="padding: 10px; border-radius: 8px;"><div style="font-size: 13px; color: #686C73;">Записка · стр. 12</div><div>На графике 2 нет подписей осей</div><div style="font-size: 12px; color: #2B8A3E; font-weight: 600;">исправлено</div></div>
+        <div style="padding: 10px; border-radius: 8px; background: #FFF1E6;"><div style="font-size: 13px; color: #686C73;">Чертёж · лист 1</div><div>Посадка ⌀40 не совпадает с расчётом</div><div style="font-size: 12px; color: #2B8A3E; font-weight: 600;">исправлено</div></div>
+        <div style="padding: 10px; border-radius: 8px;"><div style="font-size: 13px; color: #686C73;">Записка · стр. 36</div><div>Сверка списка литературы с источниками</div><div style="font-size: 12px; color: #1F3A93; font-weight: 600;">в работе</div></div>
+      </div>
+      <div style="margin-top: auto; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #686C73;">
+        <div>Токены: codex 212 тыс. · claude 96 тыс.</div>
+        <div>Версия промптов: 2026-03-10</div>
+      </div>
+    </aside>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":940}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

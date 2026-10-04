@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Новый заказ</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&amp;family=PT+Serif:ital,wght@0,400;0,700;1,400&amp;family=PT+Sans:ital,wght@0,400;0,700;1,400&amp;display=swap">
+<style>
+body{margin:0}
+@keyframes sl-swipe{0%,17%{transform:translateX(0)}20%,37%{transform:translateX(-20%)}40%,57%{transform:translateX(-40%)}60%,77%{transform:translateX(-60%)}80%,97%{transform:translateX(-80%)}100%{transform:translateX(0)}}
+@keyframes seg1{0%{transform:scaleX(0)}20%,99.9%{transform:scaleX(1)}100%{transform:scaleX(0)}}
+@keyframes seg2{0%,20%{transform:scaleX(0)}40%,99.9%{transform:scaleX(1)}100%{transform:scaleX(0)}}
+@keyframes seg3{0%,40%{transform:scaleX(0)}60%,99.9%{transform:scaleX(1)}100%{transform:scaleX(0)}}
+@keyframes seg4{0%,60%{transform:scaleX(0)}80%,99.9%{transform:scaleX(1)}100%{transform:scaleX(0)}}
+@keyframes seg5{0%,80%{transform:scaleX(0)}100%,99.9%{transform:scaleX(1)}100%{transform:scaleX(0)}}
+@media (prefers-reduced-motion: reduce){.sl-anim{animation:none!important}}
+a{color:#1F3A93}a:hover{color:#162C70}
+</style>
+</helmet>
+<div style="min-height: 1660px; display: flex; flex-direction: column; background: #FFFFFF; color: #15171A; font-family: 'Golos Text', system-ui, sans-serif; font-size: 15px; line-height: 1.5;">
+  <header style="height: 56px; flex: none; background: #FFFFFF; border-bottom: 1px solid #E4E5E8; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 28px;">
+    <div style="display: flex; align-items: center; gap: 28px;">
+      <span style="font-weight: 700; font-size: 18px; letter-spacing: -0.02em;">studlance</span>
+      <nav style="display: flex; gap: 20px; font-size: 14px;"><a href="#" style="text-decoration: none; color: #15171A; font-weight: 500;">Мои заказы</a></nav>
+    </div>
+    <span style="width: 32px; height: 32px; border-radius: 50%; background: #E6E8EE; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600;">ИП</span>
+  </header>
+
+  <section style="padding: 52px 24px 44px; display: flex; justify-content: center;">
+    <div style="width: 100%; max-width: 720px; display: flex; flex-direction: column; gap: 18px;">
+      <div style="text-align: center; display: flex; flex-direction: column; gap: 6px;">
+        <h1 style="margin: 0; font-size: 32px; font-weight: 600; letter-spacing: -0.02em;">Что нужно сделать?</h1>
+        <p style="margin: 0; color: #686C73;">Опишите задачу и приложите всё, что есть: задание, методичку, вариант, примеры.</p>
+      </div>
+      <form style="border: 1px solid #D9DBE0; border-radius: 16px; padding: 16px 16px 12px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 2px 10px rgba(21, 23, 26, 0.05);">
+        <label for="request" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);">Запрос</label>
+        <textarea id="request" rows="2" style="border: 0; outline: none; resize: none; font: inherit; font-size: 16px; color: #15171A; background: transparent; padding: 2px 4px;">Курсовая работа, вариант 14. Всё по методичке кафедры, задание и методичка во вложении.</textarea>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 14px;">
+          <span style="background: #F2F3F5; border-radius: 8px; padding: 5px 10px;">задание.pdf</span>
+          <span style="background: #F2F3F5; border-radius: 8px; padding: 5px 10px;">методичка.pdf</span>
+          <span style="background: #F2F3F5; border-radius: 8px; padding: 5px 10px;">вариант 14.jpg</span>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+          <button type="button" style="display: inline-flex; align-items: center; gap: 8px; border: 0; background: transparent; font: inherit; font-size: 14px; color: #4A4E55; padding: 8px; cursor: pointer;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"></path></svg>
+            Прикрепить файлы или папку
+          </button>
+          <button type="submit" style="border: 0; background: #1F3A93; color: #FFFFFF; font: inherit; font-weight: 600; padding: 10px 18px; border-radius: 10px; cursor: pointer;">Оформить заказ</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section style="flex: 1; background: #ECEDF0; padding: 48px 28px 56px; display: flex; flex-wrap: wrap; gap: 48px; justify-content: center; align-items: flex-start;">
+    <div style="flex: 1 1 280px; max-width: 340px; display: flex; flex-direction: column; gap: 14px; padding-top: 40px;">
+      <h2 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em;">Любые работы — готовым комплектом</h2>
+      <p style="margin: 0; color: #4A4E55;">Технические, гуманитарные, программирование: записка, расчёты, чертежи, код и презентация — в тех файлах, которые сдаются.</p>
+      <p style="margin: 0; color: #4A4E55;">Что-то не понравилось — отметьте место прямо на листе, и работу доработают.</p>
+      <p style="margin: 0; font-size: 13px; color: #686C73;">Листы из выполненных работ, личные данные скрыты.</p>
+    </div>
+    <div style="position: relative; width: 860px; max-width: 100%; height: 420px; flex: none;">
+      <div style="position: absolute; left: 0; top: 36px; width: 480px; height: 340px; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10), 0 14px 34px rgba(21, 23, 26, 0.16); transform: rotate(-2deg);"><img src="/demo/stack-tech.jpg" alt="Лист чертежа А3 из технического проекта" style="display: block; width: 480px; height: 340px;"></div>
+      <div style="position: absolute; left: 430px; top: 0; width: 250px; height: 354px; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10), 0 14px 34px rgba(21, 23, 26, 0.16); transform: rotate(2.5deg);"><img src="/demo/stack-code.jpg" alt="Страница записки со скриншотом запущенной программы" style="display: block; width: 250px; height: 354px;"></div>
+      <div style="position: absolute; left: 606px; top: 56px; width: 250px; height: 354px; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10), 0 14px 34px rgba(21, 23, 26, 0.16); transform: rotate(-1.5deg);"><img src="/demo/stack-hum.jpg" alt="Страница записки с таблицей и графиком из гуманитарной работы" style="display: block; width: 250px; height: 354px;"></div>
+    </div>
+  </section>
+
+  <section style="background: #FFFFFF; padding: 72px 28px 80px; display: flex; justify-content: center;">
+    <div style="width: 100%; max-width: 1080px; display: flex; flex-direction: column; gap: 28px;">
+      <h2 style="margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.015em;">Как это работает</h2>
+      <div style="position: relative; overflow: hidden; border-radius: 20px; background: #ECEDF0;">
+        <div aria-hidden="true" style="position: absolute; left: 56px; right: 56px; top: 28px; z-index: 1; display: flex; gap: 6px;"><span style="flex: 1; height: 3px; border-radius: 2px; background: rgba(21, 23, 26, 0.12); overflow: hidden;"><span class="sl-anim" style="display: block; height: 3px; background: #15171A; transform-origin: 0 50%; transform: scaleX(0); animation: seg1 20s linear infinite;"></span></span><span style="flex: 1; height: 3px; border-radius: 2px; background: rgba(21, 23, 26, 0.12); overflow: hidden;"><span class="sl-anim" style="display: block; height: 3px; background: #15171A; transform-origin: 0 50%; transform: scaleX(0); animation: seg2 20s linear infinite;"></span></span><span style="flex: 1; height: 3px; border-radius: 2px; background: rgba(21, 23, 26, 0.12); overflow: hidden;"><span class="sl-anim" style="display: block; height: 3px; background: #15171A; transform-origin: 0 50%; transform: scaleX(0); animation: seg3 20s linear infinite;"></span></span><span style="flex: 1; height: 3px; border-radius: 2px; background: rgba(21, 23, 26, 0.12); overflow: hidden;"><span class="sl-anim" style="display: block; height: 3px; background: #15171A; transform-origin: 0 50%; transform: scaleX(0); animation: seg4 20s linear infinite;"></span></span><span style="flex: 1; height: 3px; border-radius: 2px; background: rgba(21, 23, 26, 0.12); overflow: hidden;"><span class="sl-anim" style="display: block; height: 3px; background: #15171A; transform-origin: 0 50%; transform: scaleX(0); animation: seg5 20s linear infinite;"></span></span></div>
+        <div class="sl-anim" style="display: flex; width: 500%; animation: sl-swipe 20s cubic-bezier(0.7, 0, 0.3, 1) infinite;">
+          <div style="width: 20%; flex: none; box-sizing: border-box; height: 480px; padding: 64px 56px 40px; display: flex; align-items: center; gap: 48px;">
+            <div style="width: 300px; flex: none; display: flex; flex-direction: column; gap: 12px;">
+              <span style="font-size: 15px; color: #8A8E96;">1 из 5</span>
+              <h3 style="margin: 0; font-size: 30px; line-height: 1.15; font-weight: 600; letter-spacing: -0.02em;">Загрузили исходники</h3>
+              <p style="margin: 0; font-size: 16px; color: #4A4E55;">Пишете запрос своими словами и прикладываете всё, что есть: задание, методичку, вариант.</p>
+            </div>
+            <div style="position: relative; flex: 1; height: 380px; display: flex; align-items: center;">
+              <div style="width: 100%; background: #FFFFFF; border: 1px solid #D9DBE0; border-radius: 16px; padding: 16px 16px 12px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 2px 10px rgba(21, 23, 26, 0.05);">
+                <div style="font-size: 16px;">Курсовая работа, вариант 14. Всё по методичке кафедры, задание и методичка во вложении.</div>
+                <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 14px;"><span style="background: #F2F3F5; border-radius: 8px; padding: 5px 10px;">задание.pdf</span><span style="background: #F2F3F5; border-radius: 8px; padding: 5px 10px;">методичка.pdf</span><span style="background: #F2F3F5; border-radius: 8px; padding: 5px 10px;">вариант 14.jpg</span></div>
+                <div style="display: flex; justify-content: flex-end;"><span style="background: #1F3A93; color: #FFFFFF; font-weight: 600; font-size: 14px; padding: 10px 18px; border-radius: 10px;">Оформить заказ</span></div>
+              </div>
+            </div>
+          </div>
+          <div style="width: 20%; flex: none; box-sizing: border-box; height: 480px; padding: 64px 56px 40px; display: flex; align-items: center; gap: 48px;">
+            <div style="width: 300px; flex: none; display: flex; flex-direction: column; gap: 12px;">
+              <span style="font-size: 15px; color: #8A8E96;">2 из 5</span>
+              <h3 style="margin: 0; font-size: 30px; line-height: 1.15; font-weight: 600; letter-spacing: -0.02em;">ИИ сделал работу</h3>
+              <p style="margin: 0; font-size: 16px; color: #4A4E55;">Записка, расчёты, чертежи, код — весь комплект в тех файлах, которые сдаются.</p>
+            </div>
+            <div style="position: relative; flex: 1; height: 380px;">
+              <div style="position: absolute; left: 0; top: 60px; transform: rotate(-2deg); width: 400px; height: 283px; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10), 0 12px 30px rgba(21, 23, 26, 0.14);"><img src="/demo/how-scheme-a3.jpg" alt="Функциональная схема автоматизации, лист А3" style="display: block; width: 400px; height: 283px;"></div>
+              <div style="position: absolute; left: 300px; top: 18px; transform: rotate(2.5deg); width: 190px; height: 269px; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10), 0 12px 30px rgba(21, 23, 26, 0.14);"><img src="/demo/how-page-table.jpg" alt="Страница записки с графиком переходного процесса" style="display: block; width: 190px; height: 269px;"></div>
+              <div style="position: absolute; left: 412px; top: 92px; transform: rotate(-1.5deg); width: 190px; height: 269px; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10), 0 12px 30px rgba(21, 23, 26, 0.14);"><img src="/demo/how-page-calc.jpg" alt="Страница записки с тепловым расчётом" style="display: block; width: 190px; height: 269px;"></div>
+            </div>
+          </div>
+          <div style="width: 20%; flex: none; box-sizing: border-box; height: 480px; padding: 64px 56px 40px; display: flex; align-items: center; gap: 48px;">
+            <div style="width: 300px; flex: none; display: flex; flex-direction: column; gap: 12px;">
+              <span style="font-size: 15px; color: #8A8E96;">3 из 5</span>
+              <h3 style="margin: 0; font-size: 30px; line-height: 1.15; font-weight: 600; letter-spacing: -0.02em;">Вы проверили</h3>
+              <p style="margin: 0; font-size: 16px; color: #4A4E55;">Листаете работу прямо на сайте, страница за страницей.</p>
+            </div>
+            <div style="position: relative; flex: 1; height: 380px; display: flex; flex-direction: column; align-items: center; gap: 12px;">
+              <div style="position: relative; width: 248px; height: 351px; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10), 0 12px 30px rgba(21, 23, 26, 0.14);"><img src="/demo/how-page-table.jpg" alt="Страница работы в просмотре" style="display: block; width: 248px; height: 351px;"></div>
+              <span style="font-size: 14px; color: #686C73;">‹&#160;&#160;стр. 16 из 32&#160;&#160;›</span>
+            </div>
+          </div>
+          <div style="width: 20%; flex: none; box-sizing: border-box; height: 480px; padding: 64px 56px 40px; display: flex; align-items: center; gap: 48px;">
+            <div style="width: 300px; flex: none; display: flex; flex-direction: column; gap: 12px;">
+              <span style="font-size: 15px; color: #8A8E96;">4 из 5</span>
+              <h3 style="margin: 0; font-size: 30px; line-height: 1.15; font-weight: 600; letter-spacing: -0.02em;">Что-то не так — выделили на листе</h3>
+              <p style="margin: 0; font-size: 16px; color: #4A4E55;">Выделяете место и пишете, что поправить. ИИ доработает.</p>
+            </div>
+            <div style="position: relative; flex: 1; height: 380px; display: flex; flex-direction: column; align-items: center; gap: 12px;">
+              <div style="position: relative; width: 248px; height: 351px; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10), 0 12px 30px rgba(21, 23, 26, 0.14);"><img src="/demo/how-page-table.jpg" alt="Страница работы с выделенным местом и замечанием" style="display: block; width: 248px; height: 351px;"><span style="position: absolute; left: 14px; top: 212px; width: 220px; height: 40px; box-sizing: border-box; border: 1.5px solid #1F3A93; background: rgba(31, 58, 147, 0.12); border-radius: 3px;"></span><span style="position: absolute; left: 244px; top: 206px; width: 190px; background: #FFFFFF; border-radius: 10px; padding: 10px 12px; font-size: 14px; line-height: 1.4; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 8px 22px rgba(21, 23, 26, 0.14);">Добавьте в таблицу время переходного процесса</span></div>
+              <span style="font-size: 14px; color: #686C73;">стр. 16 из 32</span>
+            </div>
+          </div>
+          <div style="width: 20%; flex: none; box-sizing: border-box; height: 480px; padding: 64px 56px 40px; display: flex; align-items: center; gap: 48px;">
+            <div style="width: 300px; flex: none; display: flex; flex-direction: column; gap: 12px;">
+              <span style="font-size: 15px; color: #8A8E96;">5 из 5</span>
+              <h3 style="margin: 0; font-size: 30px; line-height: 1.15; font-weight: 600; letter-spacing: -0.02em;">Готовый комплект</h3>
+              <p style="margin: 0; font-size: 16px; color: #4A4E55;">Записка, расчёты, схемы и чертежи — новая версия с учтёнными замечаниями. Скачиваете и сдаёте.</p>
+              <span style="font-size: 16px; font-weight: 600; color: #1F3A93;">Скачать всё · версия 2</span>
+            </div>
+            <div style="position: relative; flex: 1; height: 380px;">
+              <div style="position: absolute; left: 0; top: 24px; width: 250px; height: 177px; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10), 0 12px 30px rgba(21, 23, 26, 0.14);"><img src="/demo/how-scheme2-a3.jpg" alt="Схема регулирования и защит, лист А3" style="display: block; width: 250px; height: 177px;"></div>
+              <div style="position: absolute; left: 0; top: 214px; width: 250px; height: 177px; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10), 0 12px 30px rgba(21, 23, 26, 0.14);"><img src="/demo/how-scheme-a3.jpg" alt="Функциональная схема автоматизации, лист А3" style="display: block; width: 250px; height: 177px;"></div>
+              <div style="position: absolute; left: 290px; top: 34px; width: 200px; height: 283px; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10), 0 12px 30px rgba(21, 23, 26, 0.14);"><img src="/demo/how-page-calc.jpg" alt="Страница записки с тепловым расчётом" style="display: block; width: 200px; height: 283px;"></div>
+              <div style="position: absolute; left: 318px; top: 62px; width: 200px; height: 283px; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10), 0 12px 30px rgba(21, 23, 26, 0.14);"><img src="/demo/how-page-table.jpg" alt="Исправленная страница записки, версия 2" style="display: block; width: 200px; height: 283px;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1660}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
