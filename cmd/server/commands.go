@@ -22,7 +22,7 @@ func createUser(dataDir, email, role, name, password string) error {
 	if err != nil {
 		return err
 	}
-	if logFile := logging.Setup(dataDir); logFile != nil {
+	if logFile := logging.SetupStderr(dataDir); logFile != nil {
 		defer func() { _ = logFile.Close() }()
 	}
 	defer func() { _ = st.Close() }()
@@ -57,7 +57,7 @@ func createWorker(dataDir, name string) error {
 	if err != nil {
 		return err
 	}
-	if logFile := logging.Setup(dataDir); logFile != nil {
+	if logFile := logging.SetupStderr(dataDir); logFile != nil {
 		defer func() { _ = logFile.Close() }()
 	}
 	defer func() { _ = st.Close() }()

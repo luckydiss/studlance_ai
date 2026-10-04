@@ -9,6 +9,7 @@ all: lint test build
 
 generate:
 	$(GO) generate ./...
+	$(PNPM) -C web --filter @studlance/shared generate
 
 lint:
 	golangci-lint run
