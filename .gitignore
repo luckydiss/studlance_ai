@@ -1,0 +1,33 @@
+# Data created at runtime
+/data/
+*.db
+*.db-shm
+*.db-wal
+
+# Build output
+/bin/
+/dist/
+*.exe
+
+# Go
+/vendor/
+
+# Node
+node_modules/
+web/**/dist/
+.pnpm-store/
+
+# Built frontends: whole dist is ignored except .keep, so `go build` works
+# without Node (the server falls back to internal/web/placeholder.html).
+/internal/web/dist/**
+!/internal/web/dist/.keep
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local config with secrets
+worker.toml
+!worker.example.toml

@@ -1,0 +1,17 @@
+{
+  "name": "studlance-web",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "pnpm -r --filter ./client --filter ./admin build",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "typescript": "5.7.2"
+  },
+  "packageManager": "pnpm@9.15.0"
+}
