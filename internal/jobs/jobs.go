@@ -91,19 +91,32 @@ type StatusStep struct {
 }
 
 // StatusSteps builds the status window steps for a normal (non-revision) order.
-// The draft_started / first-trace heuristics from 03-lifecycle.md are not
-// available until PR 3; without worker events the third step stays pending.
-func StatusSteps(j store.Job, draftStarted, verifyStarted bool) []StatusStep {
+// Steps before the current one are "done", the current one is "active" and the
+// rest are "pending". The draft_started / first-trace heuristics from
+// 03-lifecycle.md need worker events (PR 3); here we derive progress from the
+// job stage so that during verify the "Делаем работу" step is already done.
+func StatusSteps(j store.Job) []StatusStep {
 	if j.Stage == store.StageRevise || j.PendingRevision != nil {
 		return revisionSteps(j)
 	}
-	steps := make([]StatusStep, 0, 5)
-	steps = append(steps, step("Заказ принят", j.Status != store.StatusUploading))
-	steps = append(steps, step("Разбираем задание и методичку", draftStarted))
-	steps = append(steps, step("Делаем работу", false))
-	steps = append(steps, step("Оформляем по требованиям методички", verifyStarted))
-	doneStep := step("Готово", j.Status == store.StatusDone)
-	if j.Status == store.StatusDone {
+
+	accepted := j.Status != store.StatusUploading
+	draftStarted := j.Stage != "" || j.CurrentVersion > 0 || j.Status == store.StatusDone ||
+		j.Status == store.StatusNeedsInput || j.Status == store.StatusFailed
+	// codex finished (work done) once verify started or a version exists.
+	workDone := j.CurrentVersion > 0 || j.Status == store.StatusDone ||
+		(j.Status == store.StatusRunning && j.Stage == store.StageVerify)
+	verifyStarted := j.CurrentVersion > 0 || j.Status == store.StatusDone
+	done := j.Status == store.StatusDone
+
+	steps := []StatusStep{
+		step("Заказ принят", accepted),
+		step("Разбираем задание и методичку", draftStarted),
+		step("Делаем работу", workDone),
+		step("Оформляем по требованиям методички", verifyStarted),
+	}
+	doneStep := step("Готово", done)
+	if done {
 		doneStep.Title = fmt.Sprintf("Готово — версия %d", j.CurrentVersion)
 	}
 	steps = append(steps, doneStep)

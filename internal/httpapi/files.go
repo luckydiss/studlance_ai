@@ -2,17 +2,15 @@ package httpapi
 
 import (
 	"archive/zip"
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/luckydiss/studlance_ai/internal/blobs"
-	"github.com/luckydiss/studlance_ai/internal/jobs"
 	"github.com/luckydiss/studlance_ai/internal/store"
 )
 
@@ -121,33 +119,60 @@ func (resp adminLogResponse) VisitAdminGetRunLogResponse(w http.ResponseWriter) 
 // ---------- bundle ----------
 
 type bundleResponse struct {
-	data []byte
+	body io.ReadSeeker
+	size int64
+	req  *http.Request
 }
 
 func (resp bundleResponse) VisitClientGetVersionBundleResponse(w http.ResponseWriter) error {
 	writeAttachment(w, "bundle.zip")
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
-	w.Header().Set("Content-Length", strconv.Itoa(len(resp.data)))
-	w.WriteHeader(http.StatusOK)
-	_, err := w.Write(resp.data)
-	return err
+	http.ServeContent(w, resp.req, "bundle.zip", time.Time{}, resp.body)
+	if c, ok := resp.body.(io.Closer); ok {
+		_ = c.Close()
+	}
+	return nil
 }
 
-// buildBundle builds (and caches) a zip of all out/ files of a version.
-// Entry names are UTF-8; the EFS flag is set by archive/zip automatically.
-func (s *Server) buildBundle(ctx context.Context, j store.Job, version int64) ([]byte, error) {
+// openBundle opens (building and caching if needed) the zip of all out/ files
+// of a version. The archive is streamed to a temp file; entry names are UTF-8
+// and the EFS flag is set by archive/zip. Returns a seekable handle so the
+// caller can serve it with Range support.
+func (s *Server) openBundle(ctx context.Context, j store.Job, version int64) (io.ReadSeeker, int64, error) {
 	cacheKey := fmt.Sprintf("jobs/%s/v%d/bundle.zip", j.ID, version)
-	if data, err := s.readBlob(ctx, cacheKey); err == nil {
-		return data, nil
+	if rc, info, err := s.blobs.Open(ctx, cacheKey); err == nil {
+		return rc, info.Size, nil
 	}
+	if err := s.buildBundleToBlob(ctx, j, version, cacheKey); err != nil {
+		return nil, 0, err
+	}
+	rc, info, err := s.blobs.Open(ctx, cacheKey)
+	if err != nil {
+		return nil, 0, err
+	}
+	return rc, info.Size, nil
+}
+
+// buildBundleToBlob streams a zip of the version's out/ files into a temp file
+// and stores it in blobs under cacheKey, without buffering it in memory.
+func (s *Server) buildBundleToBlob(ctx context.Context, j store.Job, version int64, cacheKey string) error {
 	prefix := fmt.Sprintf("jobs/%s/v%d/out/", j.ID, version)
 	infos, err := s.blobs.List(ctx, strings.TrimSuffix(prefix, "/"))
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
+	tmp, err := os.CreateTemp("", "studlance-bundle-*.zip")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
+
+	zw := zip.NewWriter(tmp)
 	found := false
 	for _, info := range infos {
 		if !strings.HasPrefix(info.Key, prefix) {
@@ -159,7 +184,7 @@ func (s *Server) buildBundle(ctx context.Context, j store.Job, version int64) ([
 		}
 		rc, _, oErr := s.blobs.Open(ctx, info.Key)
 		if oErr != nil {
-			return nil, oErr
+			return oErr
 		}
 		fw, cErr := zw.Create(rel)
 		if cErr == nil {
@@ -168,28 +193,23 @@ func (s *Server) buildBundle(ctx context.Context, j store.Job, version int64) ([
 		_ = rc.Close()
 		if cErr != nil {
 			_ = zw.Close()
-			return nil, cErr
+			return cErr
 		}
 		found = true
 	}
 	if err := zw.Close(); err != nil {
-		return nil, err
+		return err
 	}
 	if !found {
-		return nil, store.ErrNotFound
+		return store.ErrNotFound
 	}
-	data := buf.Bytes()
-	_, _, _ = s.blobs.Put(ctx, cacheKey, bytes.NewReader(data))
-	return data, nil
-}
-
-func (s *Server) readBlob(ctx context.Context, key string) ([]byte, error) {
-	rc, _, err := s.blobs.Open(ctx, key)
-	if err != nil {
-		return nil, err
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		return err
 	}
-	defer func() { _ = rc.Close() }()
-	return io.ReadAll(rc)
+	if _, _, err := s.blobs.Put(ctx, cacheKey, tmp); err != nil {
+		return err
+	}
+	return nil
 }
 
 // writeAttachment sets a UTF-8 Content-Disposition attachment header.
@@ -222,5 +242,3 @@ func urlPathEscape(s string) string {
 	}
 	return b.String()
 }
-
-var _ = jobs.NormalizePath

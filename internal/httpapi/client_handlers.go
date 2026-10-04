@@ -1,11 +1,12 @@
 package httpapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"strconv"
@@ -101,22 +102,46 @@ func (s *Server) ClientUploadInput(ctx context.Context, request ClientUploadInpu
 	if err != nil {
 		return ClientUploadInput400JSONResponse{errBadRequest("Недопустимый путь файла")}, nil
 	}
-	key := fmt.Sprintf("jobs/%s/input/%s", j.ID, path)
-	size, sha, putErr := s.blobs.Put(ctx, key, request.Body)
-	if putErr != nil {
-		return nil, putErr
-	}
+
+	// Total limit for the order: the new file replaces any existing one at the
+	// same path, so the remaining allowance is (max - used + replaced size).
 	used, err := s.store.SumInputBytes(ctx, j.ID)
 	if err != nil {
 		return nil, err
 	}
-	if used+size > s.cfg.MaxUpload {
+	var replacedSize int64
+	existing, existingErr := s.store.InputFileByPath(ctx, j.ID, path)
+	if existingErr == nil {
+		replacedSize = existing.Size
+	}
+	remaining := s.cfg.MaxUpload - (used - replacedSize)
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	key := fmt.Sprintf("jobs/%s/input/%s", j.ID, path)
+	body := http.MaxBytesReader(responseFrom(ctx), io.NopCloser(request.Body), remaining)
+	size, sha, putErr := s.blobs.Put(ctx, key, body)
+	if putErr != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(putErr, &maxErr) {
+			return ClientUploadInput413JSONResponse{errTooLarge("Превышен лимит загрузки на заказ")}, nil
+		}
+		return nil, putErr
+	}
+	if used-replacedSize+size > s.cfg.MaxUpload {
 		_ = s.blobs.Delete(ctx, key)
 		return ClientUploadInput413JSONResponse{errTooLarge("Превышен лимит загрузки на заказ")}, nil
 	}
-	if existing, fErr := s.store.InputFileByPath(ctx, j.ID, path); fErr == nil {
-		_ = s.blobs.Delete(ctx, existing.BlobKey)
-		_ = s.store.DeleteInputFileByPath(ctx, j.ID, path)
+
+	// Remove the previous record only after the new blobs are written.
+	if existingErr == nil {
+		if err := s.store.DeleteInputFileByPath(ctx, j.ID, path); err != nil {
+			return nil, err
+		}
+		if existing.BlobKey != key {
+			_ = s.blobs.Delete(ctx, existing.BlobKey)
+		}
 	}
 	now := s.now()
 	if err := s.store.CreateFile(ctx, store.File{
@@ -277,19 +302,23 @@ func (s *Server) ClientCreateRevision(ctx context.Context, request ClientCreateR
 	}
 	remarks := make([]store.Remark, 0, len(parsed.Remarks))
 	for i, r := range parsed.Remarks {
-		if r.X < 0 || r.Y < 0 || r.W < 0 || r.H < 0 || r.X > 1 || r.Y > 1 || r.W > 1 || r.H > 1 {
-			return ClientCreateRevision400JSONResponse{errBadRequest("Неверные координаты замечания")}, nil
+		if !validRemark(r) {
+			return ClientCreateRevision400JSONResponse{errBadRequest("Неверное замечание")}, nil
 		}
-		if _, dErr := s.store.DocumentByID(ctx, r.DocumentId); dErr != nil {
-			return ClientCreateRevision400JSONResponse{errBadRequest("Документ замечания не найден")}, nil
+		doc, dErr := s.store.DocumentByID(ctx, r.DocumentId)
+		if dErr != nil || doc.JobID != j.ID || doc.Snapshot != store.SnapshotVersion || doc.Version != j.CurrentVersion {
+			return ClientCreateRevision400JSONResponse{errBadRequest("Замечание ссылается на неизвестный документ")}, nil
+		}
+		if int64(r.Page) < 1 || int64(r.Page) > doc.PageCount {
+			return ClientCreateRevision400JSONResponse{errBadRequest("Неверный номер страницы замечания")}, nil
 		}
 		remarks = append(remarks, store.Remark{
 			ID: auth.NewID(), RevisionID: rev.ID, Idx: int64(i + 1), DocumentID: r.DocumentId,
-			Page: int64(r.Page), X: r.X, Y: r.Y, W: r.W, H: r.H, Text: r.Text,
+			Page: int64(r.Page), X: r.X, Y: r.Y, W: r.W, H: r.H, Text: strings.TrimSpace(r.Text),
 		})
 	}
 
-	// Save attached revision files under input/revision-<n>/.
+	// Save attached revision files under input/revision-<n>/, streaming to blobs.
 	revPrefix := fmt.Sprintf("revision-%d", version)
 	for _, f := range files {
 		path, pErr := jobs.NormalizePath(f.Filename)
@@ -297,16 +326,14 @@ func (s *Server) ClientCreateRevision(ctx context.Context, request ClientCreateR
 			return ClientCreateRevision400JSONResponse{errBadRequest("Недопустимое имя приложенного файла")}, nil
 		}
 		key := fmt.Sprintf("jobs/%s/input/%s/%s", j.ID, revPrefix, path)
-		data, rErr := io.ReadAll(io.LimitReader(f.Content, s.cfg.MaxUpload+1))
-		if rErr != nil {
-			return nil, rErr
-		}
-		if int64(len(data)) > s.cfg.MaxUpload {
-			return ClientCreateRevision400JSONResponse{errBadRequest("Приложенный файл слишком большой")}, nil
-		}
-		size, sha, putErr := s.blobs.Put(ctx, key, bytes.NewReader(data))
+		limited := io.LimitReader(f.Content, s.cfg.MaxUpload+1)
+		size, sha, putErr := s.blobs.Put(ctx, key, limited)
 		if putErr != nil {
 			return nil, putErr
+		}
+		if size > s.cfg.MaxUpload {
+			_ = s.blobs.Delete(ctx, key)
+			return ClientCreateRevision400JSONResponse{errBadRequest("Приложенный файл слишком большой")}, nil
 		}
 		if err := s.store.CreateFile(ctx, store.File{
 			ID: auth.NewID(), JobID: j.ID, Kind: store.FileInput, Version: version,
@@ -414,6 +441,9 @@ func (s *Server) ClientGetVersionFile(ctx context.Context, request ClientGetVers
 	if pErr != nil {
 		return ClientGetVersionFile404JSONResponse{errNotFound()}, nil
 	}
+	if !versionAvailable(j, int64(request.V)) {
+		return ClientGetVersionFile404JSONResponse{errNotFound()}, nil
+	}
 	key := fmt.Sprintf("jobs/%s/v%d/out/%s", j.ID, int64(request.V), path)
 	rc, info, err := s.openBlob(ctx, key)
 	if err != nil {
@@ -431,11 +461,14 @@ func (s *Server) ClientGetVersionBundle(ctx context.Context, request ClientGetVe
 		}
 		return ClientGetVersionBundle404JSONResponse{errNotFound()}, nil
 	}
-	data, err := s.buildBundle(ctx, j, int64(request.V))
+	if !versionAvailable(j, int64(request.V)) {
+		return ClientGetVersionBundle404JSONResponse{errNotFound()}, nil
+	}
+	body, size, err := s.openBundle(ctx, j, int64(request.V))
 	if err != nil {
 		return ClientGetVersionBundle404JSONResponse{errNotFound()}, nil
 	}
-	return bundleResponse{data: data}, nil
+	return bundleResponse{body: body, size: size, req: requestFrom(ctx)}, nil
 }
 
 // ---------- shared client helpers ----------
@@ -553,9 +586,15 @@ func mergeState(existing string, updates map[string]interface{}) string {
 	return string(b)
 }
 
-// documentForVersion returns the document of a version by id, or ok=false.
+// versionAvailable reports whether a version has been released to the client:
+// only 1 <= v <= current_version (04-api.md).
+func versionAvailable(j store.Job, version int64) bool {
+	return version >= 1 && version <= j.CurrentVersion
+}
+
+// versionDocument returns the document of a version by id, or ok=false.
 func (s *Server) versionDocument(ctx context.Context, j store.Job, version int64, documentID string) (store.Document, bool) {
-	if version < 1 || version > j.CurrentVersion {
+	if !versionAvailable(j, version) {
 		return store.Document{}, false
 	}
 	doc, err := s.store.DocumentByID(ctx, documentID)
@@ -563,6 +602,27 @@ func (s *Server) versionDocument(ctx context.Context, j store.Job, version int64
 		return store.Document{}, false
 	}
 	return doc, true
+}
+
+// validRemark validates a remark's coordinates and text (04-api.md revisions).
+func validRemark(r parsedRemarkInput) bool {
+	if r.DocumentId == "" {
+		return false
+	}
+	if r.X < 0 || r.Y < 0 || r.W <= 0 || r.H <= 0 {
+		return false
+	}
+	if r.X > 1 || r.Y > 1 || r.W > 1 || r.H > 1 {
+		return false
+	}
+	if r.X+r.W > 1.000001 || r.Y+r.H > 1.000001 {
+		return false
+	}
+	text := strings.TrimSpace(r.Text)
+	if text == "" || len([]rune(text)) > 2000 {
+		return false
+	}
+	return true
 }
 
 // parseRevisionMultipart reads the multipart body into a parsed revision + files.
@@ -589,18 +649,30 @@ func parseRevisionMultipart(r *multipart.Reader) (parsedRevision, []revisionFile
 			continue
 		}
 		if name == "files" || name == "files[]" {
-			buf, rErr := io.ReadAll(io.LimitReader(part, 1<<31))
-			if rErr != nil {
-				return parsedRevision{}, nil, rErr
-			}
-			filename := part.FileName()
+			filename := partFileName(part)
 			if filename == "" {
-				filename = part.FormName()
+				return parsedRevision{}, nil, errors.New("empty filename")
 			}
-			files = append(files, revisionFile{Filename: filename, Content: bytes.NewReader(buf)})
+			// Stream the part directly; the caller writes it under a limit.
+			files = append(files, revisionFile{Filename: filename, Content: part})
 		}
 	}
 	return data, files, nil
+}
+
+// partFileName returns the full relative path from the Content-Disposition
+// filename parameter. part.FileName() only returns the base name, dropping
+// directories, so we parse the header ourselves (05-worker, 02-data paths).
+func partFileName(part *multipart.Part) string {
+	cd := part.Header.Get("Content-Disposition")
+	if cd == "" {
+		return part.FileName()
+	}
+	_, params, err := mime.ParseMediaType(cd)
+	if err != nil {
+		return part.FileName()
+	}
+	return params["filename"]
 }
 
 var (

@@ -74,13 +74,27 @@ func (h *harness) seedUser(email, password string, role store.Role) store.User {
 
 func (h *harness) do(method, path string, body io.Reader, cookie *http.Cookie, headers map[string]string) *httptest.ResponseRecorder {
 	h.t.Helper()
+	return h.serve(h.newRequest(method, path, body, cookie, headers))
+}
+
+// newRequest builds a request for the harness handler.
+func (h *harness) newRequest(method, path string, body io.Reader, cookie *http.Cookie, headers ...map[string]string) *http.Request {
+	h.t.Helper()
 	req := httptest.NewRequest(method, path, body)
 	if cookie != nil {
 		req.AddCookie(cookie)
 	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
+	for _, hs := range headers {
+		for k, v := range hs {
+			req.Header.Set(k, v)
+		}
 	}
+	return req
+}
+
+// serve runs a request through the handler.
+func (h *harness) serve(req *http.Request) *httptest.ResponseRecorder {
+	h.t.Helper()
 	rec := httptest.NewRecorder()
 	h.handler.ServeHTTP(rec, req)
 	return rec

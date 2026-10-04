@@ -4,8 +4,8 @@ package auth
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -183,7 +183,8 @@ func SessionSecret(r *http.Request) string {
 }
 
 // CheckOrigin enforces that non-GET requests to the API come from the server's
-// own origin (04-api.md, CSRF).
+// own origin (04-api.md, CSRF). When an Origin header is present, its scheme,
+// host and port must all match the request (r.Host plus the request scheme).
 func CheckOrigin(r *http.Request) bool {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
 		return true
@@ -193,22 +194,26 @@ func CheckOrigin(r *http.Request) bool {
 		// No Origin header: allow same-origin clients without CORS (e.g. curl).
 		return true
 	}
-	u := origin
-	u = strings.TrimPrefix(u, "http://")
-	u = strings.TrimPrefix(u, "https://")
-	host := r.Host
-	if u == host {
-		return true
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
 	}
-	// Allow origin host without port matching the request host.
-	oh, _, err := net.SplitHostPort(u)
-	if err == nil {
-		rh, _, rerr := net.SplitHostPort(host)
-		if rerr == nil {
-			return oh == rh
-		}
+	if !strings.EqualFold(u.Scheme, requestScheme(r)) {
+		return false
 	}
-	return false
+	return strings.EqualFold(u.Host, r.Host)
+}
+
+// requestScheme returns the scheme of the request, honouring a reverse proxy's
+// X-Forwarded-Proto.
+func requestScheme(r *http.Request) string {
+	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
+		return p
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
 }
 
 // NewID exposes id generation for handlers that need it (kept here to avoid

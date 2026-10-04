@@ -258,12 +258,7 @@ func (s *Server) clientJobDetail(ctx context.Context, j store.Job) (ClientJobDet
 }
 
 func statusSteps(j store.Job) []StatusStep {
-	// Draft/verify "started" heuristics need worker events (PR 3); derive from
-	// the current stage so the window still progresses.
-	draftStarted := j.Stage != "" || j.CurrentVersion > 0 || j.Status == store.StatusDone
-	verifyStarted := j.CurrentVersion > 0 || j.Status == store.StatusDone ||
-		(j.Status == store.StatusRunning && j.Stage == store.StageVerify)
-	steps := jobs.StatusSteps(j, draftStarted, verifyStarted)
+	steps := jobs.StatusSteps(j)
 	out := make([]StatusStep, 0, len(steps))
 	for _, st := range steps {
 		out = append(out, StatusStep{Title: st.Title, State: stepStateType(st.State)})
