@@ -81,9 +81,9 @@
 | POST | `/jobs/{id}/cancel` | → `200 JobDetail` |
 | POST | `/jobs/{id}/revisions` | `multipart/form-data`: поле `data` = JSON `{comment, remarks: [{document_id, page, x, y, w, h, text}]}` (comment или хотя бы одно замечание обязательны; x, y, w, h в 0–1), поля `files[]` с `filename` = относительный путь → `201 JobDetail` |
 | GET | `/jobs/{id}/versions/{v}/documents/{document_id}/pages` | `{pages: Page[]}` |
-| GET | `/jobs/{id}/versions/{v}/pages/{document_id}/{page}.png` | картинка страницы |
-| GET | `/jobs/{id}/versions/{v}/thumbs/{document_id}/{page}.png` | мини-копия |
-| GET | `/jobs/{id}/versions/{v}/files/{path...}` | файл комплекта, `Content-Disposition: attachment; filename*=UTF-8''…` |
+| GET | `/jobs/{id}/versions/{v}/pages/{document_id}/{page}` | картинка страницы; `{page}` — `16.png` |
+| GET | `/jobs/{id}/versions/{v}/thumbs/{document_id}/{page}` | мини-копия; `{page}` — `16.png` |
+| GET | `/jobs/{id}/versions/{v}/files/{path}` | файл комплекта; `{path}` — один сегмент, `/` кодируется как `%2F` (`Чертежи%2FЛист%201.pdf`); `Content-Disposition: attachment; filename*=UTF-8''…` |
 | GET | `/jobs/{id}/versions/{v}/bundle.zip` | архив всех файлов `out/` версии (имена в UTF-8, флаг EFS) |
 | GET | `/jobs/{id}/stream` | SSE, см. [Live](#live) |
 
@@ -132,15 +132,15 @@
 | POST | `/claim` | `{}` → long-poll до 25 с: `200 Assignment` или `204` |
 | POST | `/jobs/{id}/heartbeat` | `{epoch}` → `200 {lease_expires_at, cancel: bool}` |
 | GET | `/jobs/{id}/input` | `?epoch=` → `{files: [{path, size, sha256, revision}]}` |
-| GET | `/jobs/{id}/input/{path...}` | `?epoch=` → байты |
+| GET | `/jobs/{id}/input/{path}` | `?epoch=` → байты; `{path}` — один сегмент с `%2F` |
 | POST | `/jobs/{id}/runs` | `{epoch, agent, stage, version, attempt, session_id?}` → `201 {run_id}` |
 | PATCH | `/jobs/{id}/runs/{run_id}` | `{epoch, session_id?, finished_at?, exit_code?, outcome?, input_tokens?, output_tokens?, cost_usd?, error?}` → 204 |
 | POST | `/jobs/{id}/runs/{run_id}/steps` | `{epoch, steps: [{seq, ts, type, summary, payload}]}` → 204; дубликаты `(run_id, seq)` молча игнорируются |
 | PUT | `/jobs/{id}/runs/{run_id}/log` | `?epoch=`, тело — JSONL → 204 |
 | POST | `/jobs/{id}/state` | `{epoch, state: {codex_thread_id?, claude_session_id?, prompts_version?}}` → 204 (merge в `jobs.state`) |
 | PUT | `/jobs/{id}/snapshot/{draft\|v<n>}/files?path=` | `?epoch=`, тело — байты файла из `out/` → 204 |
-| PUT | `/jobs/{id}/snapshot/{draft\|v<n>}/pages/{document_idx}/{page}.png` и `/thumbs/…` | `?epoch=` → 204 |
-| PUT | `/jobs/{id}/input/revision-{n}/remarks/{idx}.png` | `?epoch=`, вырезка выделенного места → 204 |
+| PUT | `/jobs/{id}/snapshot/{draft\|v<n>}/pages/{document_idx}/{page}` и `/thumbs/…` (`{page}` — `16.png`) | `?epoch=` → 204 |
+| PUT | `/jobs/{id}/input/revision/{n}/remarks/{idx}` | `?epoch=`, вырезка выделенного места → 204 |
 | POST | `/jobs/{id}/snapshot/{draft\|v<n>}/commit` | `{epoch, title?, documents: [{idx, title, kind, file_path, preview_path?, page_count, pages: [{page, width, height, changed_boxes}]}], verification?}` → 204; фиксирует снимок, записывает `documents`/`pages`; для `draft` — `stage = verify`, `title`; для `v<n>` ничего не выдаёт клиенту (это делает `finish`) |
 | POST | `/jobs/{id}/question` | `{epoch, text}` → 204, `needs_input` |
 | POST | `/jobs/{id}/finish` | `{epoch, outcome: ok\|failed\|canceled\|timeout, version?, error?}` → 204 (см. переходы в [03-lifecycle.md](03-lifecycle.md)) |
