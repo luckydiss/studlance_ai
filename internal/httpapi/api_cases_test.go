@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -373,26 +374,34 @@ type flushRecorder struct {
 	h    http.Header
 	code int
 	buf  *bytes.Buffer
-	mu   chan struct{}
+	mu   sync.Mutex
 }
 
 func newFlushRecorder() *flushRecorder {
-	return &flushRecorder{h: http.Header{}, buf: &bytes.Buffer{}, mu: make(chan struct{}, 1)}
+	return &flushRecorder{h: http.Header{}, buf: &bytes.Buffer{}}
 }
 
-func (f *flushRecorder) Header() http.Header         { return f.h }
-func (f *flushRecorder) WriteHeader(code int)        { f.code = code }
-func (f *flushRecorder) Write(p []byte) (int, error) { return f.buf.Write(p) }
-func (f *flushRecorder) Flush()                      {}
-func (f *flushRecorder) bodyString() string          { return f.buf.String() }
+func (f *flushRecorder) Header() http.Header  { return f.h }
+func (f *flushRecorder) WriteHeader(code int) { f.code = code }
+func (f *flushRecorder) Write(p []byte) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.buf.Write(p)
+}
+func (f *flushRecorder) Flush() {}
+func (f *flushRecorder) bodyString() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.buf.String()
+}
 
 func waitFor(f *flushRecorder, needle string, d time.Duration) bool {
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
-		if strings.Contains(f.buf.String(), needle) {
+		if strings.Contains(f.bodyString(), needle) {
 			return true
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	return strings.Contains(f.buf.String(), needle)
+	return strings.Contains(f.bodyString(), needle)
 }
