@@ -18,11 +18,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/luckydiss/studlance_ai/internal/config"
+	"github.com/luckydiss/studlance_ai/internal/logging"
 	"github.com/luckydiss/studlance_ai/internal/store"
 	"github.com/luckydiss/studlance_ai/internal/store/sqlite"
+	"golang.org/x/term"
 )
 
 func main() {
@@ -95,6 +98,9 @@ func runMigrate(args []string) error {
 	if err != nil {
 		return err
 	}
+	if logFile := logging.Setup(cfg.Data); logFile != nil {
+		defer func() { _ = logFile.Close() }()
+	}
 	defer func() { _ = st.Close() }()
 	if err := st.Migrate(ctx); err != nil {
 		return err
@@ -111,10 +117,9 @@ func runUser(args []string) error {
 	email := fs.String("email", "", "user email")
 	role := fs.String("role", "", "admin or client")
 	name := fs.String("name", "", "display name")
-	passwordStdin := fs.Bool("password-stdin", false, "read password from stdin")
-	// server flags may follow; keep parsing known ones
-	dataDir := fs.String("data", config.DefaultServer().Data, "data directory")
-	if err := fs.Parse(args[1:]); err != nil {
+	passwordStdin := fs.Bool("password-stdin", false, "read password from the first line of stdin")
+	cfg, err := config.ParseServerFlags(fs, args[1:], os.Getenv)
+	if err != nil {
 		return err
 	}
 	if *email == "" || (*role != "admin" && *role != "client") {
@@ -124,7 +129,7 @@ func runUser(args []string) error {
 	if err != nil {
 		return err
 	}
-	return createUser(*dataDir, *email, *role, *name, password)
+	return createUser(cfg.Data, *email, *role, *name, password)
 }
 
 func readPassword(fromStdin bool) (string, error) {
@@ -132,7 +137,16 @@ func readPassword(fromStdin bool) (string, error) {
 		return config.ReadPassword(config.Stdin)
 	}
 	fmt.Fprint(os.Stderr, "Пароль: ")
-	return config.ReadPassword(config.Stdin)
+	pw, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	s := strings.TrimRight(string(pw), "\r\n")
+	if s == "" {
+		return "", errors.New("empty password")
+	}
+	return s, nil
 }
 
 func runWorker(args []string) error {
@@ -141,23 +155,21 @@ func runWorker(args []string) error {
 	}
 	fs := flag.NewFlagSet("worker token", flag.ContinueOnError)
 	name := fs.String("name", "", "worker name")
-	dataDir := fs.String("data", config.DefaultServer().Data, "data directory")
-	if err := fs.Parse(args[1:]); err != nil {
+	cfg, err := config.ParseServerFlags(fs, args[1:], os.Getenv)
+	if err != nil {
 		return err
 	}
 	if *name == "" {
 		return errors.New("--name is required")
 	}
-	return createWorker(*dataDir, *name)
+	return createWorker(cfg.Data, *name)
 }
 
 func runBackup(args []string) error {
-	cfg := config.DefaultServer()
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
-	fs.StringVar(&cfg.Addr, "addr", cfg.Addr, "HTTP listen address")
-	fs.StringVar(&cfg.Data, "data", cfg.Data, "data directory")
 	out := fs.String("out", "", "output zip path")
-	if err := fs.Parse(args); err != nil {
+	cfg, err := config.ParseServerFlags(fs, args, os.Getenv)
+	if err != nil {
 		return err
 	}
 	if *out == "" {

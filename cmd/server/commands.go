@@ -8,6 +8,7 @@ import (
 
 	"github.com/luckydiss/studlance_ai/internal/auth"
 	"github.com/luckydiss/studlance_ai/internal/id"
+	"github.com/luckydiss/studlance_ai/internal/logging"
 	"github.com/luckydiss/studlance_ai/internal/store"
 	"github.com/luckydiss/studlance_ai/internal/token"
 )
@@ -20,6 +21,9 @@ func createUser(dataDir, email, role, name, password string) error {
 	st, err := openStore(ctx, dataDir)
 	if err != nil {
 		return err
+	}
+	if logFile := logging.Setup(dataDir); logFile != nil {
+		defer func() { _ = logFile.Close() }()
 	}
 	defer func() { _ = st.Close() }()
 	if err := st.Migrate(ctx); err != nil {
@@ -52,6 +56,9 @@ func createWorker(dataDir, name string) error {
 	st, err := openStore(ctx, dataDir)
 	if err != nil {
 		return err
+	}
+	if logFile := logging.Setup(dataDir); logFile != nil {
+		defer func() { _ = logFile.Close() }()
 	}
 	defer func() { _ = st.Close() }()
 	if err := st.Migrate(ctx); err != nil {

@@ -147,11 +147,16 @@ func mapErr(err error) error {
 }
 
 func isUniqueViolation(err error) bool {
-	// modernc.org/sqlite returns a *sqlite.Error with code 19 (SQLITE_CONSTRAINT).
+	// modernc.org/sqlite returns a *sqlite.Error with an extended SQLite code.
+	// Only UNIQUE (2067) and PRIMARY KEY (1555) constraints map to ErrConflict;
+	// other constraints (CHECK, NOT NULL, FOREIGN KEY, ...) are plain errors.
 	type coder interface{ Code() int }
 	var c coder
 	if errors.As(err, &c) {
-		return c.Code() == 19 || c.Code() == 1555 || c.Code() == 2067
+		switch c.Code() {
+		case 1555, 2067: // SQLITE_CONSTRAINT_PRIMARYKEY, SQLITE_CONSTRAINT_UNIQUE
+			return true
+		}
 	}
 	return false
 }

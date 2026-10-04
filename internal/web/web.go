@@ -12,11 +12,22 @@ import (
 	"strings"
 )
 
-// distFS embeds the placeholder and, when the frontend is built, the compiled
-// client/admin apps. Keep dist/.keep in the repo so go build works without Node.
+// distFS embeds the built frontends. dist/.keep is committed so go build
+// works even without a frontend build; the actual assets are gitignored.
 //
 //go:embed all:dist
 var distFS embed.FS
+
+// placeholder is served with HTTP 200 when a frontend has not been built yet
+// (no index.html in dist). It lives outside dist so `pnpm build` never
+// overwrites it.
+//
+//go:embed placeholder.html
+var placeholder []byte
+
+// Placeholder returns the "frontend not built" page. It is embedded separately
+// from dist so a frontend build never overwrites it.
+func Placeholder() []byte { return placeholder }
 
 // Handler serves the client SPA at "/", the admin SPA under /admin, and demo
 // images under /demo. demoDir is data/demo; missing files return 404.
@@ -41,6 +52,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/healthz":
 		// handled by server mux before this handler; kept for safety
 		http.NotFound(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/"):
+		// Unknown API routes must not fall through to the SPA.
+		writeNotFound(w)
 	case strings.HasPrefix(r.URL.Path, "/demo/"):
 		h.serveDemo(w, r)
 	case r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/"):
@@ -50,9 +64,27 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func writeNotFound(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = w.Write([]byte(`{"error":{"code":"not_found","message":"Не найдено"}}`))
+}
+
+// demoFiles whitelists the only names served from /demo/, per the table in
+// docs/design/README.md. Anything else is 404.
+var demoFiles = map[string]bool{
+	"stack-tech.jpg":     true,
+	"stack-code.jpg":     true,
+	"stack-hum.jpg":      true,
+	"how-scheme-a3.jpg":  true,
+	"how-page-table.jpg": true,
+	"how-page-calc.jpg":  true,
+	"how-scheme2-a3.jpg": true,
+}
+
 func (h *handler) serveDemo(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/demo/")
-	if name == "" || strings.Contains(name, "..") || strings.ContainsAny(name, `/\`) {
+	if !demoFiles[name] {
 		http.NotFound(w, r)
 		return
 	}
@@ -100,7 +132,10 @@ func serveSPA(w http.ResponseWriter, r *http.Request, files fs.FS, base string) 
 func serveIndex(w http.ResponseWriter, r *http.Request, files fs.FS) {
 	data, err := fs.ReadFile(files, "index.html")
 	if err != nil {
-		http.Error(w, "frontend not built; run pnpm -C web build", http.StatusNotFound)
+		// Frontend not built: serve the placeholder with 200 so the page loads.
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write(placeholder)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

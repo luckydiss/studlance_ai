@@ -2,12 +2,14 @@
 package config
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -37,8 +39,16 @@ func DefaultServer() Server {
 // program name; the command (serve, migrate, ...) is expected to be removed
 // by the caller before calling ParseServer.
 func ParseServer(args []string, getenv func(string) string) (Server, error) {
-	cfg := DefaultServer()
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
+	return ParseServerFlags(fs, args, getenv)
+}
+
+// ParseServerFlags registers the server flags on fs, parses args, and returns
+// the configuration. Callers can register extra flags on fs before calling;
+// this keeps subcommands (user create, worker token, backup) honouring the
+// same --data flag and STUDLANCE_DATA env as serve.
+func ParseServerFlags(fs *flag.FlagSet, args []string, getenv func(string) string) (Server, error) {
+	cfg := DefaultServer()
 
 	fs.StringVar(&cfg.Addr, "addr", envString(getenv, "STUDLANCE_ADDR", cfg.Addr), "HTTP listen address")
 	fs.StringVar(&cfg.Data, "data", envString(getenv, "STUDLANCE_DATA", cfg.Data), "data directory")
@@ -147,16 +157,16 @@ func hasSuffix(s, suffix string) bool {
 	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
 }
 
-// ReadPassword reads a password from r (used for --password-stdin).
+// ReadPassword reads the first line from r (used for --password-stdin).
+// It does not wait for EOF: the line is returned as soon as a newline is
+// seen, or when the reader is exhausted.
 func ReadPassword(r io.Reader) (string, error) {
-	data, err := io.ReadAll(io.LimitReader(r, 1<<20))
-	if err != nil {
+	br := bufio.NewReader(io.LimitReader(r, 1<<20))
+	line, err := br.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
-	s := string(data)
-	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
-		s = s[:len(s)-1]
-	}
+	s := strings.TrimRight(line, "\r\n")
 	if s == "" {
 		return "", errors.New("empty password")
 	}

@@ -12,12 +12,16 @@ import (
 
 	"github.com/luckydiss/studlance_ai/internal/blobs/fs"
 	"github.com/luckydiss/studlance_ai/internal/config"
+	"github.com/luckydiss/studlance_ai/internal/logging"
 	"github.com/luckydiss/studlance_ai/internal/web"
 )
 
 func serve(ctx context.Context, cfg config.Server) error {
 	if err := os.MkdirAll(cfg.Data, 0o755); err != nil {
 		return err
+	}
+	if logFile := logging.Setup(cfg.Data); logFile != nil {
+		defer func() { _ = logFile.Close() }()
 	}
 	st, err := openStore(ctx, cfg.Data)
 	if err != nil {

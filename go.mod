@@ -1,11 +1,12 @@
 module github.com/luckydiss/studlance_ai
 
-go 1.24
+go 1.24.0
 
 require (
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/pressly/goose/v3 v3.24.3
 	golang.org/x/crypto v0.38.0
+	golang.org/x/term v0.32.0
 	modernc.org/sqlite v1.37.1
 )
 

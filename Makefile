@@ -21,10 +21,12 @@ web:
 	$(PNPM) -C web build
 
 build:
-	$(GO) build -o bin/ ./cmd/...
+	$(GO) build -o bin/studlance-server ./cmd/server
+	$(GO) build -o bin/studlance-worker ./cmd/worker
 
 build-windows:
-	GOOS=windows GOARCH=amd64 $(GO) build -o bin/ ./cmd/server ./cmd/worker
+	GOOS=windows GOARCH=amd64 $(GO) build -o bin/studlance-server.exe ./cmd/server
+	GOOS=windows GOARCH=amd64 $(GO) build -o bin/studlance-worker.exe ./cmd/worker
 
 clean:
 	rm -rf bin
