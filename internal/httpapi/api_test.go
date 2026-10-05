@@ -52,7 +52,7 @@ func newHarness(t *testing.T) *harness {
 	cfg.MaxUpload = 1 << 20
 	authSvc := auth.New(st, auth.Config{SessionTTL: time.Hour})
 	hub := live.New()
-	q := queue.New(st, st.DB(), hub, nil, queue.Options{})
+	q := queue.New(st, st.DB(), bs, hub, nil, queue.Options{})
 	srv := httpapi.New(st, bs, authSvc, hub, q, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return &harness{t: t, store: st, blobs: bs, auth: authSvc, handler: srv.Handler()}
 }

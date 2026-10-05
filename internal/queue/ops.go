@@ -30,11 +30,26 @@ func (q *Queue) Heartbeat(ctx context.Context, jobID, workerID string, epoch int
 	return expires, cancel, err
 }
 
+// cancelNow applies a requested cancel: it beats failures, timeouts and
+// questions in flight (03-lifecycle.md).
+func (q *Queue) cancelNow(ctx context.Context, c *sql.Conn, j store.Job, now time.Time) error {
+	if _, err := c.ExecContext(ctx,
+		"UPDATE jobs SET status = 'canceled', lease_epoch = lease_epoch + 1, lease_expires_at = NULL,"+
+			" finished_at = ?, updated_at = ? WHERE id = ?",
+		now.UnixMilli(), now.UnixMilli(), j.ID); err != nil {
+		return err
+	}
+	return insertEvent(ctx, c, now, j.ID, "canceled", true, nil)
+}
+
 // Question moves running → needs_input, records the question and drops the
 // lease (03-lifecycle.md).
 func (q *Queue) Question(ctx context.Context, jobID, workerID string, epoch int64, text string) error {
 	now := q.clock.Now()
 	err := q.fenced(ctx, jobID, workerID, epoch, func(c *sql.Conn, j store.Job) error {
+		if j.CancelRequested {
+			return q.cancelNow(ctx, c, j, now)
+		}
 		if _, err := c.ExecContext(ctx,
 			"UPDATE jobs SET status = 'needs_input', question = ?, lease_expires_at = NULL, updated_at = ? WHERE id = ?",
 			text, now.UnixMilli(), jobID); err != nil {
@@ -128,10 +143,14 @@ func (q *Queue) finishOK(ctx context.Context, c *sql.Conn, j store.Job, now time
 }
 
 // failStage records a stage failure: attempt 0 re-queues with attempt = 1 on
-// the same worker (auto-retry), attempt 1 fails the order. The lease epoch is
-// bumped so the old worker generation gets 409 stale_lease on any write.
-// Returns wake = true when the order went back to queued.
+// the same worker (auto-retry), attempt 1 fails the order. A requested cancel
+// wins over any failure. The lease epoch is bumped so the old worker
+// generation gets 409 stale_lease on any write. Returns wake = true when the
+// order went back to queued.
 func (q *Queue) failStage(ctx context.Context, c *sql.Conn, j store.Job, now time.Time, errText string) (bool, error) {
+	if j.CancelRequested {
+		return false, q.cancelNow(ctx, c, j, now)
+	}
 	if err := insertEvent(ctx, c, now, j.ID, "stage_failed", false, map[string]interface{}{
 		"stage": j.Stage, "attempt": j.Attempt, "error": errText,
 	}); err != nil {
@@ -190,6 +209,31 @@ func (q *Queue) CheckSnapshot(ctx context.Context, jobID, workerID string, epoch
 	}
 	if err := checkLease(j, workerID, epoch); err != nil {
 		return err
+	}
+	return snapshotGate(j, snap)
+}
+
+// CheckCommit is the read gate for commit: like CheckSnapshot, but a repeated
+// draft commit is allowed through (CommitSnapshot then applies the no-op).
+func (q *Queue) CheckCommit(ctx context.Context, jobID, workerID string, epoch int64, snap SnapshotRef) error {
+	j, err := q.job(ctx, jobID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if err := checkLease(j, workerID, epoch); err != nil {
+		return err
+	}
+	if err := snapshotGate(j, snap); err == nil {
+		return nil
+	}
+	if snap.Draft {
+		committed, cErr := q.st.DocumentsBySnapshot(ctx, jobID, store.SnapshotDraft, 0)
+		if cErr == nil && len(committed) > 0 {
+			return nil
+		}
 	}
 	return snapshotGate(j, snap)
 }
@@ -429,9 +473,6 @@ func (q *Queue) RecordRevisionCrop(ctx context.Context, jobID, workerID string, 
 func (q *Queue) CommitSnapshot(ctx context.Context, jobID, workerID string, epoch int64, snap SnapshotRef, title *string, docs []store.DocumentWithPages) error {
 	now := q.clock.Now()
 	err := q.fenced(ctx, jobID, workerID, epoch, func(c *sql.Conn, j store.Job) error {
-		if err := snapshotGate(j, snap); err != nil {
-			return err
-		}
 		snapshot := store.SnapshotVersion
 		version := snap.Version
 		if snap.Draft {
@@ -442,6 +483,14 @@ func (q *Queue) CommitSnapshot(ctx context.Context, jobID, workerID string, epoc
 		if err := c.QueryRowContext(ctx,
 			"SELECT COUNT(*) FROM documents WHERE job_id = ? AND snapshot = ? AND version = ?",
 			jobID, snapshot, version).Scan(&committed); err != nil {
+			return err
+		}
+		if snap.Draft && j.Stage != store.StageDraft && committed > 0 {
+			// Repeated draft commit after a lost response: the draft is
+			// already fixed and the order moved on — succeed without changes.
+			return nil
+		}
+		if err := snapshotGate(j, snap); err != nil {
 			return err
 		}
 
@@ -475,8 +524,8 @@ func (q *Queue) CommitSnapshot(ctx context.Context, jobID, workerID string, epoc
 				newTitle = trimTitle(*title)
 			}
 			if _, err := c.ExecContext(ctx,
-				"UPDATE jobs SET stage = 'verify', attempt = 0, title = ?, updated_at = ? WHERE id = ?",
-				newTitle, now.UnixMilli(), jobID); err != nil {
+				"UPDATE jobs SET stage = 'verify', attempt = 0, title = ?, stage_started_at = ?, updated_at = ? WHERE id = ?",
+				newTitle, now.UnixMilli(), now.UnixMilli(), jobID); err != nil {
 				return err
 			}
 			summaries := make([]map[string]interface{}, 0, len(docs))

@@ -595,7 +595,10 @@ func (s *Server) WorkerCommitSnapshot(ctx context.Context, request WorkerCommitS
 		return WorkerCommitSnapshot400JSONResponse{errBadRequest("Неверный снимок")}, nil
 	}
 	jobID := string(request.Id)
-	if err := s.queue.CheckSnapshot(ctx, jobID, w.ID, int64(request.Body.Epoch), snap); err != nil {
+	// The lease and snapshot gates are checked up front (CheckCommit lets a
+	// repeated draft commit through for the no-op path); the authoritative
+	// check repeats inside the CommitSnapshot transaction.
+	if err := s.queue.CheckCommit(ctx, jobID, w.ID, int64(request.Body.Epoch), snap); err != nil {
 		return workerCommitErr(err)
 	}
 	docs, verr := s.validateSnapshot(ctx, jobID, snap, request.Body.Documents)
@@ -635,6 +638,16 @@ func workerCommitErr(err error) (WorkerCommitSnapshotResponseObject, error) {
 func (s *Server) validateSnapshot(ctx context.Context, jobID string, snap queue.SnapshotRef, docs []SnapshotDocument) ([]store.DocumentWithPages, error) {
 	if len(docs) == 0 {
 		return nil, errors.New("нужен хотя бы один документ")
+	}
+	seenIdx := map[int]bool{}
+	for _, d := range docs {
+		if d.Idx < 0 {
+			return nil, fmt.Errorf("документ %q: idx не может быть отрицательным", d.Title)
+		}
+		if seenIdx[d.Idx] {
+			return nil, fmt.Errorf("документы с одинаковым idx=%d недопустимы", d.Idx)
+		}
+		seenIdx[d.Idx] = true
 	}
 	out := make([]store.DocumentWithPages, 0, len(docs))
 	for _, d := range docs {

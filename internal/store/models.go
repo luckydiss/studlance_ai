@@ -59,6 +59,10 @@ type Job struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	FinishedAt      *time.Time
+	// StageStartedAt is when the current stage started working (claim
+	// start/revise, answer delivery, draft→verify commit). The stage timeout
+	// counts from it, so time spent in needs_input is not billed.
+	StageStartedAt *time.Time
 }
 
 // InputFile is an uploaded source file.

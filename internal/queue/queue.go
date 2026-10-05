@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/luckydiss/studlance_ai/internal/blobs"
 	"github.com/luckydiss/studlance_ai/internal/id"
 	"github.com/luckydiss/studlance_ai/internal/live"
 	"github.com/luckydiss/studlance_ai/internal/store"
@@ -69,8 +70,9 @@ type Options struct {
 	LeaseTTL time.Duration
 	// ClaimWait is the long-poll ceiling (default 25 s).
 	ClaimWait time.Duration
-	// StageTimeout is the maximum stage duration counted from stage_started;
-	// exceeding it fails the stage like finish {timeout} (default 3 h).
+	// StageTimeout is the maximum stage working time counted from
+	// stage_started_at; exceeding it fails the stage like finish {timeout}
+	// (default 3 h). Time spent in needs_input is not billed.
 	StageTimeout time.Duration
 	// LeaseGrace: running jobs whose lease expired longer ago than this get
 	// needs_attention = 1 (default 10 min).
@@ -105,6 +107,7 @@ func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 type Queue struct {
 	st    store.Store
 	db    *sql.DB
+	blobs blobs.Blobs
 	hub   *live.Hub
 	clock Clock
 	opts  Options
@@ -115,13 +118,14 @@ type Queue struct {
 
 // New creates a queue on top of the store. db must be the store's own handle
 // (sqlite.Store.DB): transitions run in BEGIN IMMEDIATE transactions on a
-// dedicated connection.
-func New(st store.Store, db *sql.DB, hub *live.Hub, clock Clock, opts Options) *Queue {
+// dedicated connection. blobs is used to purge uncommitted snapshots when a
+// stage attempt starts over.
+func New(st store.Store, db *sql.DB, bl blobs.Blobs, hub *live.Hub, clock Clock, opts Options) *Queue {
 	if clock == nil {
 		clock = realClock{}
 	}
 	opts.defaults()
-	return &Queue{st: st, db: db, hub: hub, clock: clock, opts: opts}
+	return &Queue{st: st, db: db, blobs: bl, hub: hub, clock: clock, opts: opts}
 }
 
 // Wake wakes all long-polling claims. Must be called on every transition to
@@ -183,20 +187,21 @@ func (q *Queue) immediate(ctx context.Context, fn func(c *sql.Conn) error) error
 
 const jobColumns = "id, user_id, title, prompt, status, stage, current_version," +
 	" pending_revision, needs_attention, worker_id, lease_epoch, lease_expires_at," +
-	" cancel_requested, attempt, question, state, error, created_at, updated_at, finished_at"
+	" cancel_requested, attempt, question, state, error, created_at, updated_at, finished_at," +
+	" stage_started_at"
 
 // scanJob reads one job row.
 func scanJob(s interface{ Scan(...interface{}) error }) (store.Job, error) {
 	var j store.Job
 	var stage, workerID, question, errText sql.NullString
 	var pendingRevision sql.NullInt64
-	var leaseExpiresAt, finishedAt sql.NullInt64
+	var leaseExpiresAt, finishedAt, stageStartedAt sql.NullInt64
 	var needsAttention, cancelRequested int64
 	var createdAt, updatedAt int64
 	err := s.Scan(&j.ID, &j.UserID, &j.Title, &j.Prompt, &j.Status, &stage,
 		&j.CurrentVersion, &pendingRevision, &needsAttention, &workerID,
 		&j.LeaseEpoch, &leaseExpiresAt, &cancelRequested, &j.Attempt, &question,
-		&j.State, &errText, &createdAt, &updatedAt, &finishedAt)
+		&j.State, &errText, &createdAt, &updatedAt, &finishedAt, &stageStartedAt)
 	if err != nil {
 		return store.Job{}, err
 	}
@@ -211,6 +216,7 @@ func scanJob(s interface{ Scan(...interface{}) error }) (store.Job, error) {
 	j.UpdatedAt = time.UnixMilli(updatedAt).UTC()
 	j.LeaseExpiresAt = nullTime(leaseExpiresAt)
 	j.FinishedAt = nullTime(finishedAt)
+	j.StageStartedAt = nullTime(stageStartedAt)
 	return j, nil
 }
 

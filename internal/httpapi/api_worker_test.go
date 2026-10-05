@@ -83,7 +83,7 @@ func newWorkerHarness(t *testing.T) *wkHarness {
 	cfg.MaxUpload = 1 << 20
 	clock := newFakeClock()
 	hub := live.New()
-	q := queue.New(st, st.DB(), hub, clock, queue.Options{
+	q := queue.New(st, st.DB(), bl, hub, clock, queue.Options{
 		ClaimWait: 2 * time.Second,
 	})
 	authSvc := auth.New(st, auth.Config{SessionTTL: time.Hour})

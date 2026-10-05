@@ -82,6 +82,7 @@ type Job struct {
 	CreatedAt       int64
 	UpdatedAt       int64
 	FinishedAt      sql.NullInt64
+	StageStartedAt  sql.NullInt64
 }
 
 type JobNote struct {

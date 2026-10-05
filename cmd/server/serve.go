@@ -67,7 +67,7 @@ func serve(ctx context.Context, cfg config.Server) error {
 
 	hub := live.New()
 	authSvc := auth.New(st, auth.Config{SessionTTL: cfg.SessionTTL, CookieSecure: cfg.CookieSecure})
-	q := queue.New(st, st.DB(), hub, nil, queue.Options{
+	q := queue.New(st, st.DB(), blobStore, hub, nil, queue.Options{
 		StageTimeout: cfg.StageTimeout,
 		Logger:       slog.Default(),
 	})

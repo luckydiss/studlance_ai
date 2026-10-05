@@ -3,7 +3,6 @@ package queue
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -80,11 +79,15 @@ func (q *Queue) markStaleLeases(ctx context.Context) error {
 	return nil
 }
 
-// failTimedOutStages fails running stages older than StageTimeout.
+// failTimedOutStages fails running stages whose working time (from
+// stage_started_at) exceeded StageTimeout. Time in needs_input is not billed:
+// stage_started_at restarts when the answer is handed to the worker.
 func (q *Queue) failTimedOutStages(ctx context.Context) error {
 	now := q.clock.Now()
 	rows, err := q.db.QueryContext(ctx,
-		"SELECT "+jobColumns+" FROM jobs WHERE status = 'running' AND stage IS NOT NULL")
+		"SELECT "+jobColumns+" FROM jobs WHERE status = 'running' AND stage IS NOT NULL"+
+			" AND stage_started_at IS NOT NULL AND stage_started_at < ?",
+		now.Add(-q.opts.StageTimeout).UnixMilli())
 	if err != nil {
 		return err
 	}
@@ -103,10 +106,6 @@ func (q *Queue) failTimedOutStages(ctx context.Context) error {
 	}
 
 	for _, j := range jobs {
-		started, ok := q.stageStartedAt(ctx, j)
-		if !ok || now.Sub(started) < q.opts.StageTimeout {
-			continue
-		}
 		if err := q.timeoutStage(ctx, j, now); err != nil {
 			return err
 		}
@@ -114,38 +113,6 @@ func (q *Queue) failTimedOutStages(ctx context.Context) error {
 		q.Wake()
 	}
 	return nil
-}
-
-// stageStartedAt finds when the current stage attempt started by its
-// stage_started event.
-func (q *Queue) stageStartedAt(ctx context.Context, j store.Job) (time.Time, bool) {
-	rows, err := q.db.QueryContext(ctx,
-		"SELECT ts, data FROM events WHERE job_id = ? AND kind = 'stage_started' ORDER BY ts", j.ID)
-	if err != nil {
-		return time.Time{}, false
-	}
-	defer func() { _ = rows.Close() }()
-	var started time.Time
-	found := false
-	for rows.Next() {
-		var ts int64
-		var raw string
-		if err := rows.Scan(&ts, &raw); err != nil {
-			return time.Time{}, false
-		}
-		var data struct {
-			Stage   string `json:"stage"`
-			Attempt int64  `json:"attempt"`
-		}
-		if err := json.Unmarshal([]byte(raw), &data); err != nil {
-			continue
-		}
-		if data.Stage == j.Stage && data.Attempt == j.Attempt {
-			started = time.UnixMilli(ts).UTC()
-			found = true
-		}
-	}
-	return started, found
 }
 
 // timeoutStage applies the stage-timeout failure to one job, re-checking the

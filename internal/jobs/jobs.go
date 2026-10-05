@@ -103,39 +103,56 @@ type Progress struct {
 }
 
 // StatusSteps builds the status window steps for a normal (non-revision) order.
-// Steps before the current one are "done", the current one is "active" and the
-// rest are "pending". "Делаем работу" is done once the first codex trace step
-// of the draft stage arrives, or once the draft stage runs for at least a
-// minute (03-lifecycle.md).
+// Each step has a start condition; the last started step is "active", every
+// step before it is "done" (a later started step implies the earlier ones
+// started too) and the rest are "pending". "Делаем работу" starts once the
+// first codex trace step of the draft stage arrives, or once the draft stage
+// runs for at least a minute (03-lifecycle.md).
 func StatusSteps(j store.Job, p Progress) []StatusStep {
 	if j.Stage == store.StageRevise || j.PendingRevision != nil {
 		return revisionSteps(j)
 	}
 
-	accepted := j.Status != store.StatusUploading
-	draftStarted := j.Stage != "" || j.CurrentVersion > 0 || j.Status == store.StatusDone ||
-		j.Status == store.StatusNeedsInput || j.Status == store.StatusFailed
-	// codex finished (work done) once verify started or a version exists, or
-	// once draft demonstrably produces work (first trace step / 1 minute in).
-	workDone := p.CodexDraftTraced ||
-		(p.DraftStartedAt != nil && !p.DraftStartedAt.After(p.Now.Add(-time.Minute))) ||
-		j.CurrentVersion > 0 || j.Status == store.StatusDone ||
-		(j.Status == store.StatusRunning && j.Stage == store.StageVerify)
-	verifyStarted := j.CurrentVersion > 0 || j.Status == store.StatusDone
 	done := j.Status == store.StatusDone
+	titles := []string{
+		"Заказ принят",
+		"Разбираем задание и методичку",
+		"Делаем работу",
+		"Оформляем по требованиям методички",
+		"Готово",
+	}
+	started := []bool{
+		j.Status != store.StatusUploading,
+		p.DraftStartedAt != nil,
+		p.CodexDraftTraced || (p.DraftStartedAt != nil && !p.DraftStartedAt.After(p.Now.Add(-time.Minute))),
+		j.Stage == store.StageVerify || j.CurrentVersion > 0 || done,
+		done,
+	}
 
-	steps := []StatusStep{
-		step("Заказ принят", accepted),
-		step("Разбираем задание и методичку", draftStarted),
-		step("Делаем работу", workDone),
-		step("Оформляем по требованиям методички", verifyStarted),
+	steps := make([]StatusStep, len(titles))
+	for i, title := range titles {
+		steps[i] = StatusStep{Title: title, State: StepPending}
 	}
-	doneStep := step("Готово", done)
 	if done {
-		doneStep.Title = fmt.Sprintf("Готово — версия %d", j.CurrentVersion)
+		for i := range steps {
+			steps[i].State = StepDone
+		}
+		steps[len(steps)-1].Title = fmt.Sprintf("Готово — версия %d", j.CurrentVersion)
+		return steps
 	}
-	steps = append(steps, doneStep)
-	markCurrent(steps)
+
+	current := 0
+	for i, ok := range started {
+		if ok {
+			current = i
+		}
+	}
+	for i := range steps {
+		if i < current {
+			steps[i].State = StepDone
+		}
+	}
+	steps[current].State = StepActive
 	return steps
 }
 
@@ -152,23 +169,6 @@ func revisionSteps(j store.Job) []StatusStep {
 	}
 	steps = append(steps, last)
 	return steps
-}
-
-func step(title string, done bool) StatusStep {
-	if done {
-		return StatusStep{Title: title, State: StepDone}
-	}
-	return StatusStep{Title: title, State: StepPending}
-}
-
-// markCurrent marks the first pending step as active.
-func markCurrent(steps []StatusStep) {
-	for i := range steps {
-		if steps[i].State == StepPending {
-			steps[i].State = StepActive
-			return
-		}
-	}
 }
 
 // CanCancel reports whether the order may be canceled from its current status.

@@ -109,8 +109,9 @@ func (q *Queue) ClaimWait(ctx context.Context, workerID, workerName string) (*As
 func (q *Queue) claimOnce(ctx context.Context, workerID, workerName string) (*Assignment, error) {
 	now := q.clock.Now()
 	var asn *Assignment
+	var purgePrefix string
 	err := q.immediate(ctx, func(c *sql.Conn) error {
-		j, action, err := q.pick(ctx, c, workerID, now)
+		j, action, err := q.pick(ctx, c, workerID)
 		if err != nil {
 			return err
 		}
@@ -145,6 +146,15 @@ func (q *Queue) claimOnce(ctx context.Context, workerID, workerName string) (*As
 			return errClaimRace
 		}
 
+		// The stage timeout bills only working time: it starts at the stage
+		// start and restarts when an answer is handed over; continue resumes
+		// the same stretch, needs_input time is excluded.
+		if action != ActionContinue {
+			if _, err := c.ExecContext(ctx, "UPDATE jobs SET stage_started_at = ? WHERE id = ?", now.UnixMilli(), j.ID); err != nil {
+				return err
+			}
+		}
+
 		if err := insertEvent(ctx, c, now, j.ID, "claimed", false, map[string]interface{}{
 			"worker": workerName, "epoch": epoch,
 		}); err != nil {
@@ -158,6 +168,11 @@ func (q *Queue) claimOnce(ctx context.Context, workerID, workerName string) (*As
 			}); err != nil {
 				return err
 			}
+			// A fresh attempt rebuilds the stage snapshot from scratch: drop
+			// whatever the previous attempt left (files of a failed verify
+			// must not leak into the version bundle). Versions already
+			// released to the client are never touched.
+			purgePrefix = q.purgeStageSnapshot(ctx, c, j)
 		}
 		if action == ActionAnswer {
 			// The answer is consumed with the assignment: drop it from the
@@ -193,18 +208,70 @@ func (q *Queue) claimOnce(ctx context.Context, workerID, workerName string) (*As
 	if err != nil {
 		return nil, err
 	}
+	if purgePrefix != "" {
+		q.purgeBlobs(ctx, purgePrefix)
+	}
 	return asn, nil
+}
+
+// purgeStageSnapshot deletes the DB rows of the stage's uncommitted snapshot
+// inside the claim transaction and returns the blob prefix to purge after the
+// commit.
+func (q *Queue) purgeStageSnapshot(ctx context.Context, c *sql.Conn, j store.Job) string {
+	var snap, kind, docSnapshot string
+	var version int64
+	switch j.Stage {
+	case store.StageDraft:
+		snap, kind, docSnapshot, version = "draft", store.FileDraft, store.SnapshotDraft, 0
+	case store.StageVerify:
+		snap, kind, docSnapshot, version = "v1", store.FileVersion, store.SnapshotVersion, 1
+	case store.StageRevise:
+		if j.PendingRevision == nil {
+			return ""
+		}
+		version = *j.PendingRevision
+		snap, kind, docSnapshot = "v"+strconv.FormatInt(version, 10), store.FileVersion, store.SnapshotVersion
+	default:
+		return ""
+	}
+	// Versions already released to the client are never purged.
+	if docSnapshot == store.SnapshotVersion && version <= j.CurrentVersion {
+		return ""
+	}
+	if _, err := c.ExecContext(ctx,
+		"DELETE FROM files WHERE job_id = ? AND kind = ? AND version = ?", j.ID, kind, version); err != nil {
+		return ""
+	}
+	if _, err := c.ExecContext(ctx,
+		"DELETE FROM documents WHERE job_id = ? AND snapshot = ? AND version = ?", j.ID, docSnapshot, version); err != nil {
+		return ""
+	}
+	return "jobs/" + j.ID + "/" + snap + "/"
+}
+
+// purgeBlobs removes all blobs under prefix (best effort, after the commit).
+func (q *Queue) purgeBlobs(ctx context.Context, prefix string) {
+	if q.blobs == nil {
+		return
+	}
+	infos, err := q.blobs.List(ctx, prefix)
+	if err != nil {
+		return
+	}
+	for _, info := range infos {
+		_ = q.blobs.Delete(ctx, info.Key)
+	}
 }
 
 // pick selects the next job for the worker. A non-empty action means the job
 // was already running (continue); queued jobs leave the action decision to
 // the caller.
-func (q *Queue) pick(ctx context.Context, c *sql.Conn, workerID string, now time.Time) (store.Job, string, error) {
-	// 1) this worker's running orders with an expired lease.
+func (q *Queue) pick(ctx context.Context, c *sql.Conn, workerID string) (store.Job, string, error) {
+	// 1) this worker's running orders: a claiming worker is free (one order at
+	// a time), so it resumes its order even before the lease expires.
 	j, err := scanJob(c.QueryRowContext(ctx,
-		"SELECT "+jobColumns+" FROM jobs WHERE worker_id = ? AND status = 'running'"+
-			" AND lease_expires_at IS NOT NULL AND lease_expires_at < ? ORDER BY updated_at LIMIT 1",
-		workerID, now.UnixMilli()))
+		"SELECT "+jobColumns+" FROM jobs WHERE worker_id = ? AND status = 'running' ORDER BY updated_at LIMIT 1",
+		workerID))
 	if err == nil {
 		return j, ActionContinue, nil
 	}

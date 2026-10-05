@@ -63,24 +63,32 @@ func TestWorkerFullPath(t *testing.T) {
 
 	h.createRunWithSteps(wtoken, jobID, asn, "codex")
 
-	// Первый шаг трейса codex/draft → «Делаем работу» готово уже на этапе draft.
+	// Первый шаг трейса codex/draft → «Делаем работу» — текущий шаг.
 	j := h.clientJob(cookie, jobID)
 	if j.ClientStatus != "in_progress" {
 		t.Fatalf("running draft: %q", j.ClientStatus)
 	}
 	for _, s := range j.StatusSteps {
-		if s.Title == "Делаем работу" && s.State != "done" {
+		if s.Title == "Делаем работу" && s.State != "active" {
 			t.Fatalf("«Делаем работу» после первого шага codex: %+v", j.StatusSteps)
+		}
+		if s.Title == "Оформляем по требованиям методички" && s.State != "pending" {
+			t.Fatalf("«Оформляем» во время draft: %+v", j.StatusSteps)
 		}
 	}
 
 	h.uploadSnapshot(wtoken, jobID, asn.Epoch, "draft", "DRAFT DOC")
 	h.commitSnapshot(wtoken, jobID, asn.Epoch, "draft", "Готовая записка")
 
-	// stage = verify, клиенту версия ещё не видна.
+	// stage = verify → «Оформляем» — текущий; клиенту версия ещё не видна.
 	j = h.clientJob(cookie, jobID)
 	if j.ClientStatus != "in_progress" || len(j.Versions) != 0 {
 		t.Fatalf("после draft commit: %+v", j)
+	}
+	for _, s := range j.StatusSteps {
+		if s.Title == "Оформляем по требованиям методички" && s.State != "active" {
+			t.Fatalf("«Оформляем» на verify: %+v", j.StatusSteps)
+		}
 	}
 
 	h.createRunWithSteps(wtoken, jobID, asn, "claude")
@@ -180,8 +188,15 @@ func TestWorkerQuestionAnswer(t *testing.T) {
 	if asn2.Stage != "draft" || asn2.Attempt != 0 {
 		t.Fatalf("stage/attempt: %+v", asn2)
 	}
-	// Ответ уже выдан — повторный claim ничего не даёт.
-	h.claimExpect204(wtoken)
+	// Ответ уже выдан и не повторяется. Свободный воркер, зовущий claim снова,
+	// получает свой running-заказ как continue (см. п. 6 ревью).
+	asn3 := h.claim(wtoken)
+	if asn3.Action != "continue" || asn3.Answer != nil {
+		t.Fatalf("повторная выдача: %+v", asn3)
+	}
+	if _, ok := asn3.State["pending_answer"]; ok {
+		t.Fatalf("pending_answer выдан повторно: %+v", asn3.State)
+	}
 }
 
 // 3. Доработка: done → revisions → claim action: revise → вырезка → v2.
