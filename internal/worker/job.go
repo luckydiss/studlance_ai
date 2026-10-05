@@ -1,0 +1,227 @@
+package worker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/luckydiss/studlance_ai/internal/httpapi"
+	"github.com/luckydiss/studlance_ai/internal/worker/client"
+	"github.com/luckydiss/studlance_ai/internal/worker/procwin"
+	"github.com/luckydiss/studlance_ai/prompts"
+)
+
+// stageOutcome is the end of one stage attempt.
+type stageOutcome int
+
+const (
+	outcomeSuccess  stageOutcome = iota // stage done, snapshot/commit follow
+	outcomeQuestion                     // QUESTIONS.md appeared — question posted
+	outcomeFailed                       // stage failed — finish failed/timeout
+	outcomeCanceled                     // cancel requested — finish canceled
+	outcomeAborted                      // stale lease or worker shutdown — no finish
+)
+
+type stageResult struct {
+	outcome stageOutcome
+	errText string
+	timeout bool
+}
+
+// jobExec runs one claimed assignment.
+type jobExec struct {
+	w   *Worker
+	asn *httpapi.Assignment
+	dir string
+	log *slog.Logger
+
+	stage       string // current stage (draft|verify|revise)
+	inputFiles  []httpapi.WorkerInputFile
+	state       localState
+	officePIDs  []uint32
+	agentCancel context.CancelFunc // cancels the agent's stage context
+
+	cancelRequested atomic.Bool
+	stale           atomic.Bool
+	stageTimeout    atomic.Bool
+}
+
+// executeJob handles one assignment end to end: prepare, stages, after-stage.
+func (w *Worker) executeJob(ctx context.Context, asn *httpapi.Assignment) {
+	j := &jobExec{
+		w:   w,
+		asn: asn,
+		dir: filepath.Join(w.cfg.WorkDir, asn.JobId),
+		log: w.logger.With("job", asn.JobId),
+	}
+	j.run(ctx)
+}
+
+func (j *jobExec) run(ctx context.Context) {
+	if err := j.prepare(ctx); err != nil {
+		j.log.Error("prepare failed", "err", err)
+		if !isStale(err) && ctx.Err() == nil {
+			j.finish(ctx, httpapi.FinishRequestOutcomeFailed, nil, "не удалось подготовить папку заказа: "+err.Error())
+		}
+		return
+	}
+
+	// Server state + prompts version for the admin view.
+	if err := j.setState(ctx, map[string]interface{}{"prompts_version": prompts.PromptsVersion}); err != nil {
+		if isStale(err) {
+			return
+		}
+		j.log.Error("set state", "err", err)
+	}
+
+	agentCtx, agentCancel := context.WithCancel(ctx)
+	j.agentCancel = agentCancel
+	defer agentCancel()
+
+	hbDone := make(chan struct{})
+	go j.heartbeatLoop(ctx, hbDone)
+	defer close(hbDone)
+
+	j.officePIDs = procwin.OfficePIDs()
+	defer procwin.KillNewOffice(j.officePIDs)
+
+	action := string(j.asn.Action)
+	j.stage = string(j.asn.Stage)
+	for {
+		res := j.runStage(ctx, agentCtx, j.stage, action)
+		switch res.outcome {
+		case outcomeAborted:
+			return
+		case outcomeCanceled:
+			j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
+			return
+		case outcomeQuestion:
+			return // question already posted
+		case outcomeFailed:
+			outcome := httpapi.FinishRequestOutcomeFailed
+			if res.timeout {
+				outcome = httpapi.FinishRequestOutcomeTimeout
+			}
+			j.finish(ctx, outcome, nil, res.errText)
+			return
+		}
+		// Success: after-stage by stage kind (05-worker.md «После этапа»).
+		switch j.stage {
+		case "draft":
+			if !j.commitDraft(ctx) {
+				return
+			}
+			// Straight into verify on the same lease, without a new claim.
+			// The server reset attempt to 0 at the draft commit.
+			j.stage = "verify"
+			action = "start"
+			j.asn.Attempt = 0
+			j.saveState()
+			j.log.Info("draft committed, starting verify")
+		case "verify":
+			v := 1
+			if !j.commitVersion(ctx, v, "draft") {
+				return
+			}
+			j.finish(ctx, httpapi.FinishRequestOutcomeOk, &v, "")
+			return
+		case "revise":
+			v := j.asn.Version
+			prev := fmt.Sprintf("v%d", v-1)
+			if !j.commitVersion(ctx, v, prev) {
+				return
+			}
+			j.finish(ctx, httpapi.FinishRequestOutcomeOk, &v, "")
+			return
+		default:
+			j.log.Error("unknown stage", "stage", j.stage)
+			return
+		}
+	}
+}
+
+// heartbeatLoop extends the lease and watches for cancellation and fencing.
+func (j *jobExec) heartbeatLoop(ctx context.Context, done chan struct{}) {
+	t := time.NewTicker(j.w.cfg.HeartbeatDuration())
+	defer t.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		resp, err := j.w.cl.Heartbeat(ctx, j.asn.JobId, j.asn.Epoch)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			// Stale lease or "order not running": drop the job at once.
+			if isStale(err) || isConflict(err) {
+				j.log.Error("heartbeat lost the lease", "err", err)
+				j.stale.Store(true)
+				j.agentCancel()
+				return
+			}
+			j.log.Error("heartbeat", "err", err)
+			continue
+		}
+		if resp.Cancel {
+			j.log.Info("cancel requested")
+			j.cancelRequested.Store(true)
+			j.agentCancel()
+			return
+		}
+	}
+}
+
+// finish reports the terminal outcome; best-effort logs on top of it.
+func (j *jobExec) finish(ctx context.Context, outcome httpapi.FinishRequestOutcome, version *int, errText string) {
+	req := httpapi.FinishRequest{Epoch: j.asn.Epoch, Outcome: outcome, Version: version}
+	if errText != "" {
+		req.Error = &errText
+	}
+	if err := j.w.cl.Finish(ctx, j.asn.JobId, req); err != nil {
+		j.log.Error("finish", "outcome", outcome, "err", err)
+		return
+	}
+	j.log.Info("finished", "outcome", outcome, "error", errText)
+}
+
+func isConflict(err error) bool {
+	var ce *client.ConflictError
+	return errors.As(err, &ce)
+}
+
+// humanDuration renders «3 ч» / «15 мин» for error strings.
+func humanDuration(d time.Duration) string {
+	if d%time.Hour == 0 {
+		return fmt.Sprintf("%d ч", int(d/time.Hour))
+	}
+	if d%time.Minute == 0 {
+		return fmt.Sprintf("%d мин", int(d/time.Minute))
+	}
+	return d.String()
+}
+
+// ---------- helpers shared by stage/snapshot code ----------
+
+func readFileTrimmed(path string, limit int) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	s := strings.TrimSpace(string(raw))
+	r := []rune(s)
+	if len(r) > limit {
+		s = string(r[:limit])
+	}
+	return s
+}
