@@ -14,23 +14,53 @@ import (
 )
 
 // TestHelperProcess is not a test; it is the child process Run launches. It
-// emits codex-shaped JSONL: thread.started, then HELPER_LINES agent_message
-// items with HELPER_LINE_DELAY_MS between them, one stderr line, then sleeps
-// HELPER_SLEEP_MS, writes HELPER_MARKER (proof it survived) and exits with
-// HELPER_EXIT.
+// emits codex-shaped JSONL and understands two modes (HELPER_MODE):
+//
+//   - "" (default): thread.started, then HELPER_LINES agent_message items
+//     with HELPER_LINE_DELAY_MS between them (text is "helper step N", or
+//     HELPER_LINE_BYTES of 'x' when set), one stderr line, then sleeps
+//     HELPER_SLEEP_MS, then HELPER_TAIL_LINES more items, writes
+//     HELPER_MARKER (proof it survived) and exits with HELPER_EXIT.
+//   - "longline": thread.started, one command_execution item whose
+//     aggregated_output is HELPER_LONG_BYTES of 'x' (default 10 MiB), then
+//     two agent_message items, exit HELPER_EXIT.
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
 	}
+	exitCode, _ := strconv.Atoi(os.Getenv("HELPER_EXIT"))
+
+	if os.Getenv("HELPER_MODE") == "longline" {
+		n, _ := strconv.Atoi(os.Getenv("HELPER_LONG_BYTES"))
+		if n <= 0 {
+			n = 10 << 20
+		}
+		fmt.Println(`{"type":"thread.started","thread_id":"helper-thread-long"}`)
+		fmt.Printf(`{"type":"item.completed","item":{"id":"big1","type":"command_execution","command":"big-output","aggregated_output":"%s","exit_code":0}}`+"\n",
+			strings.Repeat("x", n))
+		fmt.Println(`{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"after long line 1"}}`)
+		fmt.Println(`{"type":"item.completed","item":{"id":"m2","type":"agent_message","text":"after long line 2"}}`)
+		os.Exit(exitCode)
+	}
+
 	n, _ := strconv.Atoi(os.Getenv("HELPER_LINES"))
 	delayMs, _ := strconv.Atoi(os.Getenv("HELPER_LINE_DELAY_MS"))
 	sleepMs, _ := strconv.Atoi(os.Getenv("HELPER_SLEEP_MS"))
-	exitCode, _ := strconv.Atoi(os.Getenv("HELPER_EXIT"))
+	tail, _ := strconv.Atoi(os.Getenv("HELPER_TAIL_LINES"))
+	lineBytes, _ := strconv.Atoi(os.Getenv("HELPER_LINE_BYTES"))
 	marker := os.Getenv("HELPER_MARKER")
+
+	line := func(i int) {
+		text := fmt.Sprintf("helper step %d", i)
+		if lineBytes > 0 {
+			text = strings.Repeat("x", lineBytes)
+		}
+		fmt.Printf(`{"type":"item.completed","item":{"id":"item_%d","type":"agent_message","text":%q}}`+"\n", i, text)
+	}
 
 	fmt.Println(`{"type":"thread.started","thread_id":"helper-thread-1"}`)
 	for i := 1; i <= n; i++ {
-		fmt.Printf(`{"type":"item.completed","item":{"id":"item_%d","type":"agent_message","text":"helper step %d"}}`+"\n", i, i)
+		line(i)
 		if delayMs > 0 {
 			time.Sleep(time.Duration(delayMs) * time.Millisecond)
 		}
@@ -38,6 +68,9 @@ func TestHelperProcess(t *testing.T) {
 	fmt.Fprintln(os.Stderr, "helper stderr line")
 	if sleepMs > 0 {
 		time.Sleep(time.Duration(sleepMs) * time.Millisecond)
+	}
+	for i := n + 1; i <= n+tail; i++ {
+		line(i)
 	}
 	if marker != "" {
 		_ = os.WriteFile(marker, []byte("done"), 0o644)
@@ -111,10 +144,10 @@ func helperSpec(t *testing.T, env ...string) RunSpec {
 func TestRunCollectsSteps(t *testing.T) {
 	fastFlush(t, 30*time.Millisecond, 4)
 	var col collector
-	var session string
+	sessionCh := make(chan string, 1)
 	spec := helperSpec(t, "HELPER_LINES=10", "HELPER_LINE_DELAY_MS=10", "HELPER_EXIT=0")
 	spec.Send = col.send
-	spec.OnSession = func(id string) { session = id }
+	spec.OnSession = func(id string) { sessionCh <- id }
 
 	res, err := Run(context.Background(), spec)
 	if err != nil {
@@ -129,8 +162,13 @@ func TestRunCollectsSteps(t *testing.T) {
 	if res.AgentFailed != "" {
 		t.Fatalf("AgentFailed = %q, want empty", res.AgentFailed)
 	}
-	if session != "helper-thread-1" {
-		t.Fatalf("OnSession id = %q, want %q", session, "helper-thread-1")
+	select {
+	case id := <-sessionCh:
+		if id != "helper-thread-1" {
+			t.Fatalf("OnSession id = %q, want %q", id, "helper-thread-1")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnSession was not called")
 	}
 
 	steps := col.all()
@@ -158,6 +196,158 @@ func TestRunCollectsSteps(t *testing.T) {
 	}
 	if !strings.Contains(string(log), `{"_stderr":"helper stderr line"}`) {
 		t.Fatal("log does not contain the stderr line as JSON")
+	}
+}
+
+// TestRunLongLine: a 10 MiB stdout line is logged in full and still parsed
+// (compacted first); the run does not hang and later lines keep coming.
+func TestRunLongLine(t *testing.T) {
+	fastFlush(t, 50*time.Millisecond, 50)
+	var col collector
+	spec := helperSpec(t, "HELPER_MODE=longline", "HELPER_EXIT=0")
+	spec.Send = col.send
+
+	res, err := Run(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0", res.ExitCode)
+	}
+
+	// The raw log holds the long line in full.
+	info, err := os.Stat(spec.LogPath)
+	if err != nil {
+		t.Fatalf("stat log: %v", err)
+	}
+	if info.Size() < 10<<20 {
+		t.Fatalf("log size = %d, want at least the full 10 MiB line", info.Size())
+	}
+
+	steps := col.all()
+	wantTypes := []string{"command", "message", "message"}
+	if len(steps) != len(wantTypes) {
+		t.Fatalf("sent steps = %d, want %d", len(steps), len(wantTypes))
+	}
+	for i, want := range wantTypes {
+		if steps[i].Type != want {
+			t.Fatalf("step %d Type = %q, want %q", i, steps[i].Type, want)
+		}
+		if steps[i].Seq != i+1 {
+			t.Fatalf("step %d Seq = %d, want %d", i, steps[i].Seq, i+1)
+		}
+	}
+
+	cmd := steps[0]
+	out, _ := cmd.Payload["output"].(string)
+	if len(out) != 20*1024 {
+		t.Fatalf("output bytes = %d, want %d (tail of the compacted output)", len(out), 20*1024)
+	}
+	if out != strings.Repeat("x", 20*1024) {
+		t.Fatal("output is not the tail of aggregated_output")
+	}
+	note, _ := cmd.Payload["_truncated"].(string)
+	if !strings.Contains(note, "обрезано") {
+		t.Fatalf("payload _truncated = %q, want a cut note", note)
+	}
+}
+
+// TestRunSlowNetworkDoesNotBlockReader: a Send blocked for 3 s on the first
+// batch must not stall the reader — the helper process still runs to exit
+// and every step arrives afterwards with a monotone Seq.
+func TestRunSlowNetworkDoesNotBlockReader(t *testing.T) {
+	fastFlush(t, 50*time.Millisecond, 50)
+	marker := filepath.Join(t.TempDir(), "finished")
+	var col collector
+	var once sync.Once
+	send := func(steps []NewStep) error {
+		once.Do(func() {
+			time.Sleep(3 * time.Second)
+			// The process could exit only if the reader kept draining its
+			// stdout while this Send was blocked.
+			if _, err := os.Stat(marker); err != nil {
+				t.Errorf("helper did not exit while Send was blocked: %v", err)
+			}
+		})
+		return col.send(steps)
+	}
+	spec := helperSpec(t, "HELPER_LINES=10", "HELPER_EXIT=0", "HELPER_MARKER="+marker)
+	spec.Send = send
+
+	start := time.Now()
+	res, err := Run(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 3*time.Second {
+		t.Fatalf("Run took %v, want at least the blocked first Send", elapsed)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0", res.ExitCode)
+	}
+
+	steps := col.all()
+	if len(steps) != 10 {
+		t.Fatalf("sent steps = %d, want 10", len(steps))
+	}
+	for i, s := range steps {
+		if s.Seq != i+1 {
+			t.Fatalf("step %d Seq = %d, want %d", i, s.Seq, i+1)
+		}
+	}
+}
+
+// TestRunQueueOverflowDropsSteps: with the queue memory cap shrunk to 10 KB
+// and Send blocked, most of a 100-step burst is dropped (raw log only), Seq
+// numbers are still consumed, and the tail steps resume at Seq 101.
+func TestRunQueueOverflowDropsSteps(t *testing.T) {
+	fastFlush(t, 50*time.Millisecond, 50)
+	oldMax := maxQueueBytes
+	maxQueueBytes = 10 * 1024
+	t.Cleanup(func() { maxQueueBytes = oldMax })
+
+	release := make(chan struct{})
+	var col collector
+	var once sync.Once
+	send := func(steps []NewStep) error {
+		once.Do(func() { <-release }) // the first batch blocks until released
+		return col.send(steps)
+	}
+	spec := helperSpec(t,
+		"HELPER_LINES=100", "HELPER_LINE_BYTES=1024",
+		"HELPER_SLEEP_MS=1500", "HELPER_TAIL_LINES=3", "HELPER_EXIT=0")
+	spec.Send = send
+
+	go func() {
+		time.Sleep(1 * time.Second)
+		close(release)
+	}()
+
+	res, err := Run(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0", res.ExitCode)
+	}
+
+	steps := col.all()
+	if len(steps) == 0 {
+		t.Fatal("no steps arrived at all")
+	}
+	if len(steps) >= 103 {
+		t.Fatalf("sent steps = %d, want some dropped (100 burst + 3 tail)", len(steps))
+	}
+	for i := 1; i < len(steps); i++ {
+		if steps[i].Seq <= steps[i-1].Seq {
+			t.Fatalf("Seq not increasing at %d: %d after %d", i, steps[i].Seq, steps[i-1].Seq)
+		}
+	}
+	tailSteps := steps[len(steps)-3:]
+	for i, want := range []int{101, 102, 103} {
+		if tailSteps[i].Seq != want {
+			t.Fatalf("tail step %d Seq = %d, want %d (dropped steps must consume Seq)", i, tailSteps[i].Seq, want)
+		}
 	}
 }
 
@@ -198,6 +388,9 @@ func TestRunCancelKills(t *testing.T) {
 	}
 	if !res.Killed {
 		t.Fatal("Killed = false, want true")
+	}
+	if res.KillTimeout {
+		t.Fatal("KillTimeout = true, want false (the job object kill is prompt)")
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("marker file exists: the process was not killed")

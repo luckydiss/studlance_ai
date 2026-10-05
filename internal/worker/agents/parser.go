@@ -7,7 +7,11 @@
 // at 300 runes; command and tool outputs keep only the last 20 KB.
 package agents
 
-import "time"
+import (
+	"fmt"
+	"strconv"
+	"time"
+)
 
 const (
 	// summaryRunes is the maximum length of a Step.Summary, in runes.
@@ -20,12 +24,9 @@ const (
 // Step is one parsed trace step of an agent run.
 type Step struct {
 	Ts      time.Time
-	Type    string // message|reasoning|command|file|web|tool|error
+	Type    string // message|reasoning|command|file|web|tool|tool_result|result|error
 	Summary string
 	Payload map[string]interface{}
-	// ToolUseID is an internal join key matching tool_result events to their
-	// tool_use step (claude); it is not part of Payload.
-	ToolUseID string
 }
 
 // Usage accumulates token counters and cost of an agent run.
@@ -39,8 +40,8 @@ type Usage struct {
 // Parser consumes raw JSONL lines of one CLI and accumulates the trace.
 type Parser interface {
 	// Feed consumes one stdout line; unknown or broken lines are ignored,
-	// Feed never reports errors. Feed may mutate the Payload of a
-	// previously returned step (tool_result arrives after tool_use).
+	// Feed never reports errors. Steps are immutable once appended: a
+	// tool_result arrives as its own step, never by mutating an earlier one.
 	Feed(line []byte, ts time.Time)
 	// Steps returns every step parsed so far, in arrival order.
 	Steps() []Step
@@ -51,8 +52,9 @@ type Parser interface {
 	SessionID() string
 	// Usage returns the accumulated token/cost counters.
 	Usage() Usage
-	// Failed reports the agent-reported failure (codex turn.failed/error,
-	// claude result is_error or subtype != "success").
+	// Failed reports the agent-reported failure (codex turn.failed, claude
+	// result is_error or subtype != "success"). Codex "error" events are
+	// reconnect warnings and do not fail the run.
 	Failed() (string, bool)
 }
 
@@ -76,4 +78,25 @@ func tailBytes(s string, n int) string {
 		s = s[1:]
 	}
 	return s
+}
+
+// humanTokens renders a token count compactly: 12300 -> "12.3k".
+func humanTokens(n int) string {
+	if n < 1000 {
+		return strconv.Itoa(n)
+	}
+	return fmt.Sprintf("%.1fk", float64(n)/1000)
+}
+
+// noteTrunc adds the "_truncated" note of a compacted raw line (see
+// truncateJSONLine) to a step payload; payload may be nil.
+func noteTrunc(payload map[string]interface{}, truncated string) map[string]interface{} {
+	if truncated == "" {
+		return payload
+	}
+	if payload == nil {
+		payload = make(map[string]interface{})
+	}
+	payload["_truncated"] = truncated
+	return payload
 }

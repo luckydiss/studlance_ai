@@ -276,8 +276,10 @@ func (j *jobExec) docPreviewPDF(ctx context.Context, snapDir, srcPath, rel strin
 	case ".png", ".jpg", ".jpeg":
 		return "", ""
 	case ".docx", ".doc", ".rtf", ".odt", ".xlsx", ".xls", ".pptx":
-		base := strings.TrimSuffix(filepath.Base(rel), ext)
-		dstRel := "preview/" + base + ".pdf"
+		// Named after the full relative path so same-named documents in
+		// different folders do not collide: out/a/Отчёт.docx →
+		// preview/a/Отчёт.docx.pdf.
+		dstRel := "preview/" + rel + ".pdf"
 		dst := filepath.Join(snapDir, filepath.FromSlash(dstRel))
 		ok, err := preview.ConvertToPDF(ctx, srcPath, dst)
 		if err != nil {
@@ -360,24 +362,18 @@ func diffWithPrev(prevName, snapshotsDir string, prevIdx, idx, pageNo int, curPa
 // ---------- small helpers ----------
 
 func (j *jobExec) uploadFile(ctx context.Context, snap, rel, localPath string) error {
-	f, err := os.Open(localPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	return j.w.cl.PutSnapshotFile(ctx, j.asn.JobId, snap, j.asn.Epoch, rel, f)
+	return j.putWithRetry(ctx, localPath, func(r io.Reader) error {
+		return j.w.cl.PutSnapshotFile(ctx, j.asn.JobId, snap, j.asn.Epoch, rel, r)
+	})
 }
 
 func (j *jobExec) uploadReader(ctx context.Context, snap, kind string, idx, page int, localPath string) error {
-	f, err := os.Open(localPath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	if kind == "page" {
-		return j.w.cl.PutSnapshotPage(ctx, j.asn.JobId, snap, j.asn.Epoch, idx, page, f)
-	}
-	return j.w.cl.PutSnapshotThumb(ctx, j.asn.JobId, snap, j.asn.Epoch, idx, page, f)
+	return j.putWithRetry(ctx, localPath, func(r io.Reader) error {
+		if kind == "page" {
+			return j.w.cl.PutSnapshotPage(ctx, j.asn.JobId, snap, j.asn.Epoch, idx, page, r)
+		}
+		return j.w.cl.PutSnapshotThumb(ctx, j.asn.JobId, snap, j.asn.Epoch, idx, page, r)
+	})
 }
 
 func loadSnapshotInfo(dir string) snapshotInfo {
@@ -390,14 +386,16 @@ func loadSnapshotInfo(dir string) snapshotInfo {
 	return info
 }
 
-// summaryTitle reads the first line of SUMMARY.md (without «#», ≤ 120 chars).
+// summaryTitle reads the first line of SUMMARY.md: BOM stripped, leading
+// «#»/spaces dropped, ≤ 120 chars.
 func summaryTitle(path string) string {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
 	line, _, _ := strings.Cut(string(raw), "\n")
-	line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "#"))
+	line = strings.TrimPrefix(line, "\ufeff")
+	line = strings.TrimSpace(strings.TrimLeft(line, "# "))
 	r := []rune(line)
 	if len(r) > 120 {
 		line = string(r[:120])

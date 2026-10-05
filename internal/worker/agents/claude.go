@@ -10,20 +10,19 @@ import (
 // claudeParser parses `claude -p --output-format stream-json --verbose`
 // JSONL (05-worker.md).
 type claudeParser struct {
-	expect   string
-	session  string
-	steps    []Step
-	byToolID map[string]int // tool_use_id -> index in steps
-	usage    Usage
-	failed   string
-	hasFail  bool
+	expect  string
+	session string
+	steps   []Step
+	usage   Usage
+	failed  string
+	hasFail bool
 }
 
 // NewClaudeParser creates a parser for claude stream-json output.
 // expectSession is the session id the worker generated; "" disables the
 // match check (the first init session is simply remembered).
 func NewClaudeParser(expectSession string) Parser {
-	return &claudeParser{expect: expectSession, byToolID: make(map[string]int)}
+	return &claudeParser{expect: expectSession}
 }
 
 // claudeMessage is the message object of assistant/user events.
@@ -50,12 +49,19 @@ type claudeEvent struct {
 	Message   *claudeMessage `json:"message"`
 	IsError   bool           `json:"is_error"`
 	Result    string         `json:"result"`
+	// Truncated is set by the runner when the raw line was compacted before
+	// parsing (see truncateJSONLine); it is propagated into step payloads.
+	Truncated string `json:"_truncated"`
+	// Errors carries the failure reasons of a result event (e.g. a resume
+	// with an unknown session id).
+	Errors []string `json:"errors"`
 	// TotalCostUSD is the run cost; usage carries the token counters.
 	TotalCostUSD float64 `json:"total_cost_usd"`
 	Usage        *struct {
-		InputTokens          int `json:"input_tokens"`
-		CacheReadInputTokens int `json:"cache_read_input_tokens"`
-		OutputTokens         int `json:"output_tokens"`
+		InputTokens              int `json:"input_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
 	} `json:"usage"`
 }
 
@@ -88,7 +94,7 @@ func (p *claudeParser) Feed(line []byte, ts time.Time) {
 	case "user":
 		p.user(e, ts)
 	case "result":
-		p.result(e)
+		p.result(e, ts)
 	}
 }
 
@@ -117,16 +123,14 @@ func (p *claudeParser) assistant(e claudeEvent, ts time.Time) {
 		default:
 			continue
 		}
+		step.Payload = noteTrunc(step.Payload, e.Truncated)
 		p.steps = append(p.steps, step)
-		if b.Type == "tool_use" && b.ID != "" {
-			p.byToolID[b.ID] = len(p.steps) - 1
-		}
 	}
 }
 
 // toolUse maps a tool_use block to a step by tool name.
 func (p *claudeParser) toolUse(b claudeBlock, ts time.Time) Step {
-	step := Step{Ts: ts, ToolUseID: b.ID}
+	step := Step{Ts: ts}
 	var input claudeInput
 	if b.Input != nil {
 		input = *b.Input
@@ -157,41 +161,52 @@ func (p *claudeParser) toolUse(b claudeBlock, ts time.Time) Step {
 	return step
 }
 
-// user attaches tool_result blocks to their tool_use steps; a failed result
-// also produces an error step.
+// user turns every tool_result block into its own step (type "tool_result",
+// or "error" when the tool failed); the step is linked to its tool_use via
+// payload.tool_use_id.
 func (p *claudeParser) user(e claudeEvent, ts time.Time) {
 	for _, b := range contentBlocks(e.Message) {
 		if b.Type != "tool_result" {
 			continue
 		}
 		text := tailBytes(toolResultText(b.Content), outputTailBytes)
-		if idx, ok := p.byToolID[b.ToolUseID]; ok {
-			if p.steps[idx].Payload == nil {
-				p.steps[idx].Payload = make(map[string]interface{})
-			}
-			p.steps[idx].Payload["result"] = text
-		}
+		stepType := "tool_result"
 		if b.IsError {
-			p.steps = append(p.steps, Step{
-				Ts:      ts,
-				Type:    "error",
-				Summary: headRunes(text, summaryRunes),
-				Payload: map[string]interface{}{"text": text},
-			})
+			stepType = "error"
 		}
+		p.steps = append(p.steps, Step{
+			Ts:      ts,
+			Type:    stepType,
+			Summary: headRunes(text, summaryRunes),
+			Payload: noteTrunc(map[string]interface{}{
+				"tool_use_id": b.ToolUseID,
+				"result":      text,
+			}, e.Truncated),
+		})
 	}
 }
 
-// result folds the final result event into usage, cost and failure.
-func (p *claudeParser) result(e claudeEvent) {
+// result folds the final result event into usage, cost and failure, and
+// appends the terminal "result" step. The input token total includes cache
+// creation and cache read tokens, matching the codex counters.
+func (p *claudeParser) result(e claudeEvent, ts time.Time) {
+	input, cached, output := 0, 0, 0
 	if e.Usage != nil {
-		p.usage.InputTokens += e.Usage.InputTokens
-		p.usage.CachedInputTokens += e.Usage.CacheReadInputTokens
-		p.usage.OutputTokens += e.Usage.OutputTokens
+		input = e.Usage.InputTokens + e.Usage.CacheCreationInputTokens + e.Usage.CacheReadInputTokens
+		cached = e.Usage.CacheReadInputTokens
+		output = e.Usage.OutputTokens
+		p.usage.InputTokens += input
+		p.usage.CachedInputTokens += cached
+		p.usage.OutputTokens += output
 	}
 	p.usage.CostUSD = e.TotalCostUSD
+
+	var summary string
 	if e.IsError || (e.Subtype != "" && e.Subtype != "success") {
-		msg := e.Result
+		msg := strings.Join(e.Errors, "; ")
+		if msg == "" {
+			msg = e.Result
+		}
 		if msg == "" {
 			msg = e.Subtype
 		}
@@ -199,7 +214,23 @@ func (p *claudeParser) result(e claudeEvent) {
 			msg = "claude run failed"
 		}
 		p.fail(msg)
+		summary = "ошибка: " + headRunes(msg, summaryRunes)
+	} else {
+		summary = fmt.Sprintf("готово: %s токенов, $%.2f", humanTokens(input+output), e.TotalCostUSD)
 	}
+	p.steps = append(p.steps, Step{
+		Ts:      ts,
+		Type:    "result",
+		Summary: summary,
+		Payload: noteTrunc(map[string]interface{}{
+			"input_tokens":        input,
+			"output_tokens":       output,
+			"cached_input_tokens": cached,
+			"cost_usd":            e.TotalCostUSD,
+			"subtype":             e.Subtype,
+			"is_error":            e.IsError,
+		}, e.Truncated),
+	})
 }
 
 // contentBlocks decodes a message content array; a plain string content

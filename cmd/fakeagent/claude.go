@@ -27,6 +27,27 @@ func runClaude(cfg *config) int {
 	if cfg.markers["#fail-verify"] {
 		return claudeFailure(em, sessionID)
 	}
+	if cfg.markers["#fail-verify-once"] || cfg.markers["#fail-verify-twice"] {
+		dir, err := stateDir()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "fakeagent:", err)
+			return 2
+		}
+		if !flagExists(dir, "failed-verify-1") {
+			if err := setFlag(dir, "failed-verify-1"); err != nil {
+				fmt.Fprintln(os.Stderr, "fakeagent:", err)
+				return 2
+			}
+			return claudeFailure(em, sessionID)
+		}
+		if cfg.markers["#fail-verify-twice"] && !flagExists(dir, "failed-verify-2") {
+			if err := setFlag(dir, "failed-verify-2"); err != nil {
+				fmt.Fprintln(os.Stderr, "fakeagent:", err)
+				return 2
+			}
+			return claudeFailure(em, sessionID)
+		}
+	}
 
 	cwd, err := os.Getwd()
 	if err != nil {

@@ -151,6 +151,76 @@ func TestDiffPagesLocalSpot(t *testing.T) {
 	}
 }
 
+func TestDiffPagesFractionalThreshold(t *testing.T) {
+	// 13 of the 100 pixels of one cell dim by 50 gray levels: the mean cell
+	// diff is 6.5, above the threshold of 6. Integer rounding would lose it.
+	dir := t.TempDir()
+	prev := filepath.Join(dir, "prev.png")
+	cur := filepath.Join(dir, "cur.png")
+	solidPNG(t, prev, 400, 300, color.RGBA{255, 255, 255, 255}, image.Rectangle{})
+
+	img := image.NewRGBA(image.Rect(0, 0, 400, 300))
+	for y := 0; y < 300; y++ {
+		for x := 0; x < 400; x++ {
+			img.SetRGBA(x, y, color.RGBA{255, 255, 255, 255})
+		}
+	}
+	// Cell (col 20, row 15) spans x 200..209, y 150..159.
+	dim := color.RGBA{205, 205, 205, 255}
+	n := 0
+	for y := 150; y < 160 && n < 13; y++ {
+		for x := 200; x < 210 && n < 13; x++ {
+			img.SetRGBA(x, y, dim)
+			n++
+		}
+	}
+	writePNG(t, cur, img)
+
+	boxes, err := DiffPages(prev, cur)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(boxes) != 1 {
+		t.Fatalf("got %d boxes, want 1 (mean cell diff 6.5 > 6): %v", len(boxes), boxes)
+	}
+	want := Box{0.5, 0.5, 1.0 / 40, 10.0 / 300}
+	if boxes[0] != want {
+		t.Fatalf("got %+v, want %+v", boxes[0], want)
+	}
+}
+
+func TestDiffPagesBoxInHeightFractions(t *testing.T) {
+	// 400x295: the height is not a multiple of the 10px cell, so the last
+	// row is shorter. Y/H must be fractions of the real page height, and a
+	// spot at the very bottom must reach Y close to 1-H.
+	dir := t.TempDir()
+	prev := filepath.Join(dir, "prev.png")
+	cur := filepath.Join(dir, "cur.png")
+	solidPNG(t, prev, 400, 295, color.RGBA{255, 255, 255, 255}, image.Rectangle{})
+	solidPNG(t, cur, 400, 295, color.RGBA{255, 255, 255, 255}, image.Rect(100, 291, 150, 295))
+
+	boxes, err := DiffPages(prev, cur)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(boxes) != 1 {
+		t.Fatalf("got %d boxes, want 1: %v", len(boxes), boxes)
+	}
+	b := boxes[0]
+	// The spot sits in row 29 (y 290..294): Y = 290/295, H = 5/295.
+	want := Box{0.25, 290.0 / 295, 0.125, 5.0 / 295}
+	const tol = 0.005
+	if b.X < want.X-tol || b.X > want.X+tol ||
+		b.Y < want.Y-tol || b.Y > want.Y+tol ||
+		b.W < want.W-tol || b.W > want.W+tol ||
+		b.H < want.H-tol || b.H > want.H+tol {
+		t.Fatalf("got %+v, want ~%+v", b, want)
+	}
+	if d := b.Y + b.H - 1; d < -tol || d > tol {
+		t.Fatalf("bottom box does not reach the page bottom: Y+H-1 = %v", d)
+	}
+}
+
 func TestDiffPagesNoPrev(t *testing.T) {
 	dir := t.TempDir()
 	cur := filepath.Join(dir, "cur.png")

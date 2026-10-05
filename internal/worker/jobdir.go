@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/luckydiss/studlance_ai/internal/httpapi"
 	"github.com/luckydiss/studlance_ai/internal/worker/client"
@@ -25,6 +26,9 @@ type localState struct {
 	CodexThreadID   string `json:"codex_thread_id,omitempty"`
 	ClaudeSessionID string `json:"claude_session_id,omitempty"`
 	QuestionSeq     int    `json:"question_seq"`
+	// StageStartedAt persists the stage start so the stage timeout survives
+	// a worker restart (continue does not restart the clock).
+	StageStartedAt time.Time `json:"stage_started_at,omitempty"`
 }
 
 // prepare creates the working folder, downloads input/ (skipping files whose
@@ -62,11 +66,13 @@ func (j *jobExec) prepare(ctx context.Context) error {
 }
 
 // downloadInput fetches one input file unless the local copy already matches.
+// Server paths that are invalid on Windows get a deterministic local name.
 func (j *jobExec) downloadInput(ctx context.Context, f httpapi.WorkerInputFile) error {
 	rel, err := sanitizeRel(f.Path)
 	if err != nil {
 		return fmt.Errorf("input path %q: %w", f.Path, err)
 	}
+	rel = mapLocalName(rel)
 	dst := filepath.Join(j.dir, "input", filepath.FromSlash(rel))
 	if sameFileHash(dst, f.Sha256) {
 		return nil
@@ -74,22 +80,42 @@ func (j *jobExec) downloadInput(ctx context.Context, f httpapi.WorkerInputFile) 
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(dst), ".dl-*")
-	if err != nil {
-		return err
+	// Download with retries and a sha256 check (a corrupt transfer is
+	// downloaded again); stale lease and other 4xx are not retried.
+	backoff := 2 * time.Second
+	for {
+		tmp, err := os.CreateTemp(filepath.Dir(dst), ".dl-*")
+		if err != nil {
+			return err
+		}
+		err = j.w.cl.GetInput(ctx, j.asn.JobId, j.asn.Epoch, f.Path, tmp)
+		if cerr := tmp.Close(); err == nil {
+			err = cerr
+		}
+		if err == nil && !sameFileHash(tmp.Name(), f.Sha256) {
+			err = fmt.Errorf("sha256 mismatch for %s", f.Path)
+		}
+		if err == nil {
+			if err := os.Rename(tmp.Name(), dst); err != nil {
+				return fmt.Errorf("place %s: %w", f.Path, err)
+			}
+			return nil
+		}
+		_ = os.Remove(tmp.Name())
+		if !client.IsRetryable(err) || ctx.Err() != nil {
+			return fmt.Errorf("download %s: %w", f.Path, err)
+		}
+		j.log.Error("download failed, retrying", "path", f.Path, "err", err)
+		if !sleepCtx(ctx, backoff) {
+			return fmt.Errorf("download %s: %w", f.Path, err)
+		}
+		if backoff < 60*time.Second {
+			backoff *= 2
+			if backoff > 60*time.Second {
+				backoff = 60 * time.Second
+			}
+		}
 	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	err = j.w.cl.GetInput(ctx, j.asn.JobId, j.asn.Epoch, f.Path, tmp)
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return fmt.Errorf("download %s: %w", f.Path, err)
-	}
-	if err := os.Rename(tmp.Name(), dst); err != nil {
-		return fmt.Errorf("place %s: %w", f.Path, err)
-	}
-	return nil
 }
 
 // writeTaskMD writes TASK.md: the client prompt plus the list of initial
@@ -105,7 +131,7 @@ func (j *jobExec) writeTaskMD() error {
 			continue
 		}
 		any = true
-		fmt.Fprintf(&b, "- input/%s (%s)\n", f.Path, humanSize(f.Size))
+		fmt.Fprintf(&b, "- input/%s (%s)\n", localPath(f.Path), humanSize(f.Size))
 	}
 	if !any {
 		b.WriteString("—\n")
@@ -120,9 +146,18 @@ func (j *jobExec) filesLine() string {
 		if f.Revision != 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "- input/%s (%s)\n", f.Path, humanSize(f.Size))
+		fmt.Fprintf(&b, "- input/%s (%s)\n", localPath(f.Path), humanSize(f.Size))
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// localPath maps a server-side input path to the name on disk.
+func localPath(p string) string {
+	clean, err := sanitizeRel(p)
+	if err != nil {
+		return "_"
+	}
+	return mapLocalName(clean)
 }
 
 // ---------- state.json ----------
@@ -192,7 +227,8 @@ func (j *jobExec) statePath() string    { return filepath.Join(j.metaDir(), "sta
 
 // sanitizeRel validates a slash-separated relative path.
 func sanitizeRel(p string) (string, error) {
-	if p == "" || strings.HasPrefix(p, "/") || strings.ContainsRune(p, '\\') || strings.ContainsRune(p, ':') {
+	// Note: ':' is NOT rejected here — mapLocalName rewrites it afterwards.
+	if p == "" || strings.HasPrefix(p, "/") || strings.ContainsRune(p, '\\') {
 		return "", errors.New("bad path")
 	}
 	clean := path.Clean(p)
@@ -200,6 +236,51 @@ func sanitizeRel(p string) (string, error) {
 		return "", errors.New("bad path")
 	}
 	return clean, nil
+}
+
+// windowsReserved are device names that cannot be file names on Windows.
+var windowsReserved = map[string]bool{
+	"CON": true, "PRN": true, "AUX": true, "NUL": true,
+	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
+	"COM6": true, "COM7": true, "COM8": true, "COM9": true,
+	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true,
+	"LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
+}
+
+// mapLocalName rewrites a slash-separated relative path into a Windows-safe
+// one: invalid characters (: ? * " < > | and control chars) become "_",
+// trailing dots and spaces are dropped, reserved device names get a "_"
+// suffix. Deterministic; applied on every OS so tests match production.
+func mapLocalName(rel string) string {
+	segs := strings.Split(rel, "/")
+	for i, seg := range segs {
+		segs[i] = mapLocalSegment(seg)
+	}
+	return strings.Join(segs, "/")
+}
+
+func mapLocalSegment(seg string) string {
+	mapped := strings.Map(func(r rune) rune {
+		switch {
+		case r < 32, r == '<', r == '>', r == ':', r == '"', r == '|', r == '?', r == '*':
+			return '_'
+		}
+		return r
+	}, seg)
+	mapped = strings.TrimRight(mapped, ". ")
+	if mapped == "" {
+		mapped = "_"
+	}
+	// Reserved names compare on the base name (before any extension); the "_"
+	// goes between base and extension: con.docx → con_.docx.
+	base, ext := mapped, ""
+	if i := strings.IndexByte(mapped, '.'); i >= 0 {
+		base, ext = mapped[:i], mapped[i:]
+	}
+	if windowsReserved[strings.ToUpper(base)] {
+		mapped = base + "_" + ext
+	}
+	return mapped
 }
 
 func sha256Sum(b []byte) string {

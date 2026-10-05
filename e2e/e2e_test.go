@@ -327,3 +327,145 @@ func containsName(names []string, want string) bool {
 	}
 	return false
 }
+
+// #fail-verify-once: verify падает один раз → авто-повтор с НОВОЙ сессией
+// claude → done v1 (ревью, п.1: свежий session id и есть ожидаемый).
+func TestFailVerifyOnce(t *testing.T) {
+	h := newHarness(t)
+	h.startWorker()
+
+	jobID := h.newJob("Сделай практическую работу #fail-verify-once")
+	h.waitClientStatus(jobID, "done", 90*time.Second)
+	aj := h.adminJob(jobID)
+	var claudeRuns int
+	for _, r := range aj.AgentRuns {
+		if r.Agent == "claude" {
+			claudeRuns++
+		}
+	}
+	if claudeRuns != 2 {
+		t.Fatalf("claude runs = %d, want 2 (падение + авто-повтор)", claudeRuns)
+	}
+	if aj.CurrentVersion != 1 {
+		t.Fatalf("current_version = %d", aj.CurrentVersion)
+	}
+}
+
+// Admin retry после исчерпанных падений verify: failed → retry → claim →
+// verify проходит с новой сессией claude (ревью, п.1).
+func TestAdminRetryAfterFailVerify(t *testing.T) {
+	h := newHarness(t)
+	h.startWorker()
+
+	jobID := h.newJob("Сделай практическую работу #fail-verify-twice")
+	h.waitClientStatus(jobID, "delayed", 90*time.Second)
+	if aj := h.adminJob(jobID); aj.Status != "failed" || !aj.NeedsAttention {
+		t.Fatalf("status = %s needs_attention = %v", aj.Status, aj.NeedsAttention)
+	}
+
+	if code := h.doJSON(http.MethodPost, "/api/admin/jobs/"+jobID+"/retry", h.adminCookie, nil, nil); code != http.StatusOK {
+		t.Fatalf("admin retry: %d", code)
+	}
+	h.waitClientStatus(jobID, "done", 90*time.Second)
+	aj := h.adminJob(jobID)
+	var claudeRuns int
+	for _, r := range aj.AgentRuns {
+		if r.Agent == "claude" {
+			claudeRuns++
+		}
+	}
+	if claudeRuns != 3 {
+		t.Fatalf("claude runs = %d, want 3 (2 падения + retry)", claudeRuns)
+	}
+}
+
+// #longline: строка 10 МБ в JSONL не вешает и не валит этап (ревью, п.2).
+func TestLongLine(t *testing.T) {
+	h := newHarness(t)
+	h.startWorker()
+
+	jobID := h.newJob("Сделай практическую работу #longline")
+	h.waitClientStatus(jobID, "done", 90*time.Second)
+
+	// Сырой лог содержит длинную строку целиком.
+	aj := h.adminJob(jobID)
+	var runID string
+	for _, r := range aj.AgentRuns {
+		if r.Agent == "codex" {
+			runID = r.Id
+		}
+	}
+	if runID == "" {
+		t.Fatalf("нет codex-рана")
+	}
+	resp := h.doRaw(http.MethodGet, fmt.Sprintf("/api/admin/jobs/%s/runs/%s/log", jobID, runID), h.adminCookie, nil, "")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("log: %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) < 10_000_000 {
+		t.Fatalf("лог %d байт, ждали > 10 МБ", len(raw))
+	}
+	if !bytes.Contains(raw, []byte("aggregated_output")) {
+		t.Fatalf("в логе нет длинной строки")
+	}
+}
+
+// Сеть не должна останавливать агента (ревью, п.5): API воркера «лежит» 3 с
+// посреди draft — агент всё равно заканчивает работу, шаги доходят после.
+func TestServerOutage(t *testing.T) {
+	h := newHarnessGate(t, true)
+	h.startWorker()
+
+	jobID := h.newJob("Сделай практическую работу #slow")
+	h.waitFor("draft run started", 30*time.Second, func() bool {
+		for _, r := range h.adminJob(jobID).AgentRuns {
+			if r.Agent == "codex" {
+				return true
+			}
+		}
+		return false
+	})
+
+	// «Ложим» API воркера: все /api/worker/* запросы висят.
+	h.gate.Store(true)
+	// Пока сеть лежит, агент заканчивает запись файлов (не заблокирован).
+	if !h.poll(20*time.Second, func() bool {
+		_, err := os.Stat(filepath.Join(h.workDir, jobID, "manifest.json"))
+		return err == nil
+	}) {
+		var listing strings.Builder
+		_ = filepath.WalkDir(h.workDir, func(p string, d os.DirEntry, err error) error {
+			if err == nil {
+				listing.WriteString(p + "\n")
+			}
+			return nil
+		})
+		t.Fatalf("agent artifacts not written while API down\nworker logs:\n%s\nworkdir:\n%s", h.logs.String(), listing.String())
+	}
+	time.Sleep(500 * time.Millisecond)
+	h.gate.Store(false)
+	close(h.gateRelease)
+
+	h.waitClientStatus(jobID, "done", 90*time.Second)
+	// Шаги дошли после восстановления сети.
+	aj := h.adminJob(jobID)
+	for _, r := range aj.AgentRuns {
+		if r.Agent == "codex" {
+			var steps httpapi.TraceStepList
+			if code := h.doJSON(http.MethodGet,
+				fmt.Sprintf("/api/admin/jobs/%s/runs/%s/steps", jobID, r.Id), h.adminCookie, nil, &steps); code != http.StatusOK {
+				t.Fatalf("steps: %d", code)
+			}
+			if len(steps.Steps) == 0 {
+				t.Fatalf("шаги не дошли после восстановления сети")
+			}
+			return
+		}
+	}
+	t.Fatalf("нет codex-рана")
+}

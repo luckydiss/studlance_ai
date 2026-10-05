@@ -48,7 +48,7 @@ func TestCodexSimple(t *testing.T) {
 	}
 
 	steps := p.Steps()
-	wantTypes := []string{"reasoning", "command", "file", "message"}
+	wantTypes := []string{"reasoning", "command", "file", "message", "result"}
 	if got := stepTypes(steps); !slices.Equal(got, wantTypes) {
 		t.Fatalf("step types = %v, want %v", got, wantTypes)
 	}
@@ -81,6 +81,21 @@ func TestCodexSimple(t *testing.T) {
 		t.Fatalf("message summary = %q, want %q", steps[3].Summary, want)
 	}
 
+	// turn.completed yields a terminal result step with the token counters.
+	res := steps[4]
+	if want := "готово: 5.1k токенов"; res.Summary != want {
+		t.Fatalf("result summary = %q, want %q", res.Summary, want)
+	}
+	if got := res.Payload["input_tokens"]; got != 4200 {
+		t.Fatalf("result payload input_tokens = %v, want 4200", got)
+	}
+	if got := res.Payload["cached_input_tokens"]; got != 1500 {
+		t.Fatalf("result payload cached_input_tokens = %v, want 1500", got)
+	}
+	if got := res.Payload["output_tokens"]; got != 860 {
+		t.Fatalf("result payload output_tokens = %v, want 860", got)
+	}
+
 	wantUsage := Usage{InputTokens: 4200, CachedInputTokens: 1500, OutputTokens: 860}
 	if got := p.Usage(); got != wantUsage {
 		t.Fatalf("Usage = %+v, want %+v", got, wantUsage)
@@ -95,7 +110,7 @@ func TestCodexSearch(t *testing.T) {
 	feedFile(t, p, "testdata/codex_search.jsonl")
 
 	steps := p.Steps()
-	wantTypes := []string{"web", "tool", "message", "message"}
+	wantTypes := []string{"web", "tool", "message", "result", "message", "result"}
 	if got := stepTypes(steps); !slices.Equal(got, wantTypes) {
 		t.Fatalf("step types = %v, want %v", got, wantTypes)
 	}
@@ -104,6 +119,14 @@ func TestCodexSearch(t *testing.T) {
 	}
 	if want := "docs/lookup"; steps[1].Summary != want {
 		t.Fatalf("tool summary = %q, want %q", steps[1].Summary, want)
+	}
+
+	// Every turn.completed yields its own result step.
+	if got := steps[3].Payload["input_tokens"]; got != 1000 {
+		t.Fatalf("first result payload input_tokens = %v, want 1000", got)
+	}
+	if got := steps[5].Payload["input_tokens"]; got != 500 {
+		t.Fatalf("second result payload input_tokens = %v, want 500", got)
 	}
 
 	// Usage sums over both turn.completed events.
@@ -129,12 +152,38 @@ func TestCodexFailed(t *testing.T) {
 	}
 
 	steps := p.Steps()
-	wantTypes := []string{"reasoning", "error"}
+	wantTypes := []string{"reasoning", "error", "error"}
 	if got := stepTypes(steps); !slices.Equal(got, wantTypes) {
 		t.Fatalf("step types = %v, want %v", got, wantTypes)
 	}
-	if steps[1].Summary != msg {
-		t.Fatalf("error step summary = %q, want %q", steps[1].Summary, msg)
+	// The {"type":"error"} event is a plain error step; only turn.failed fails.
+	if want := "stream error: reconnecting"; steps[1].Summary != want {
+		t.Fatalf("error step summary = %q, want %q", steps[1].Summary, want)
+	}
+	if steps[2].Summary != msg {
+		t.Fatalf("turn.failed step summary = %q, want %q", steps[2].Summary, msg)
+	}
+}
+
+// TestCodexErrorEventNotFatal: a {"type":"error"} event alone never fails
+// the run.
+func TestCodexErrorEventNotFatal(t *testing.T) {
+	p := NewCodexParser()
+	ts := time.Now().UTC()
+	p.Feed([]byte(`{"type":"error","message":"stream error: reconnecting"}`), ts)
+
+	steps := p.Steps()
+	if len(steps) != 1 {
+		t.Fatalf("steps = %d, want 1", len(steps))
+	}
+	if steps[0].Type != "error" {
+		t.Fatalf("step type = %q, want error", steps[0].Type)
+	}
+	if want := "stream error: reconnecting"; steps[0].Summary != want {
+		t.Fatalf("step summary = %q, want %q", steps[0].Summary, want)
+	}
+	if msg, failed := p.Failed(); failed {
+		t.Fatalf("Failed = %q, want false for an error event", msg)
 	}
 }
 
@@ -178,6 +227,7 @@ func TestCodexGarbage(t *testing.T) {
 		`{"type":"item.completed","item":{"type":"todo_list","items":[]}}`,
 		`{"type":"turn.completed"}`,
 		`{"type":"turn.failed"}`,
+		`{"type":"error"}`,
 		`{"broken`,
 	} {
 		p.Feed([]byte(line), ts)
@@ -186,6 +236,30 @@ func TestCodexGarbage(t *testing.T) {
 		t.Fatalf("steps = %d, want 0", got)
 	}
 	if _, failed := p.Failed(); failed {
-		t.Fatal("Failed = true on empty turn.failed, want false")
+		t.Fatal("Failed = true on empty turn.failed/error, want false")
+	}
+}
+
+// TestCodexRealOutOfCredits parses a real codex-cli 0.160.0 log (recorded on
+// 2026-10-05; the workspace was out of credits): the type:"error" event is a
+// trace step only, turn.failed fails the stage.
+func TestCodexRealOutOfCredits(t *testing.T) {
+	p := NewCodexParser()
+	feedFile(t, p, "testdata/codex_real_out_of_credits.jsonl")
+	if p.ThreadID() != "01a10d25-2c96-7992-bff7-7d0ce145fcce" {
+		t.Fatalf("thread = %q", p.ThreadID())
+	}
+	var errSteps int
+	for _, s := range p.Steps() {
+		if s.Type == "error" {
+			errSteps++
+		}
+	}
+	if errSteps == 0 {
+		t.Fatal("no error step for the type:error event")
+	}
+	msg, failed := p.Failed()
+	if !failed || !strings.Contains(msg, "out of credits") {
+		t.Fatalf("Failed = %v %q", failed, msg)
 	}
 }

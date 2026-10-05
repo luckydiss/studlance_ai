@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -15,13 +16,18 @@ import (
 
 // prepareRevision builds the rework package before a revise stage
 // (05-worker.md «Подготовка доработки»): remark crops cut from the previous
-// version's pages, uploaded and referenced from REVISION-<n>.md.
+// version's pages, uploaded and referenced from REVISION-<n>.md. Idempotent:
+// a fully prepared revision (REVISION-<n>.md exists) is not rebuilt.
 func (j *jobExec) prepareRevision(ctx context.Context) error {
 	rev := j.asn.Revision
 	if rev == nil {
 		return fmt.Errorf("нет данных доработки")
 	}
 	n := rev.Version
+	mdPath := filepath.Join(j.dir, fmt.Sprintf("REVISION-%d.md", n))
+	if _, err := os.Stat(mdPath); err == nil {
+		return nil // already prepared (e.g. continue after a crash mid-stage)
+	}
 
 	remarksDir := filepath.Join(j.dir, "input", fmt.Sprintf("revision-%d", n), "remarks")
 	if err := os.MkdirAll(remarksDir, 0o755); err != nil {
@@ -30,6 +36,7 @@ func (j *jobExec) prepareRevision(ctx context.Context) error {
 	prevDir := filepath.Join(j.snapshotsDir(), fmt.Sprintf("v%d", n-1))
 	prevInfo := loadSnapshotInfo(prevDir)
 
+	cropped := map[int]bool{}
 	for _, r := range rev.Remarks {
 		cropPath, err := j.cropRemark(prevDir, prevInfo, remarksDir, n, r)
 		if err != nil {
@@ -38,6 +45,7 @@ func (j *jobExec) prepareRevision(ctx context.Context) error {
 			j.log.Error("remark crop skipped", "idx", r.Idx, "err", err)
 			continue
 		}
+		cropped[r.Idx] = true
 		if err := j.uploadCrop(ctx, n, r.Idx, cropPath); err != nil {
 			if isStale(err) {
 				return err
@@ -46,8 +54,7 @@ func (j *jobExec) prepareRevision(ctx context.Context) error {
 		}
 	}
 
-	return os.WriteFile(filepath.Join(j.dir, fmt.Sprintf("REVISION-%d.md", n)),
-		[]byte(j.revisionMD(rev)), 0o644)
+	return os.WriteFile(mdPath, []byte(j.revisionMD(rev, cropped)), 0o644)
 }
 
 // cropRemark cuts the remark area (plus a 3 % margin, clamped to the page)
@@ -97,16 +104,14 @@ func (j *jobExec) cropRemark(prevDir string, prevInfo snapshotInfo, remarksDir s
 }
 
 func (j *jobExec) uploadCrop(ctx context.Context, n, idx int, path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	return j.w.cl.PutRevisionRemark(ctx, j.asn.JobId, j.asn.Epoch, n, idx, f)
+	return j.putWithRetry(ctx, path, func(r io.Reader) error {
+		return j.w.cl.PutRevisionRemark(ctx, j.asn.JobId, j.asn.Epoch, n, idx, r)
+	})
 }
 
 // revisionMD renders REVISION-<n>.md (05-worker.md «Подготовка доработки»).
-func (j *jobExec) revisionMD(rev *httpapi.AssignmentRevision) string {
+// The «Вырезка: …» reference is written only for remarks whose crop exists.
+func (j *jobExec) revisionMD(rev *httpapi.AssignmentRevision, cropped map[int]bool) string {
 	n := rev.Version
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Доработка — версия %d\n\n", n)
@@ -120,8 +125,12 @@ func (j *jobExec) revisionMD(rev *httpapi.AssignmentRevision) string {
 		b.WriteString("—\n")
 	}
 	for _, r := range rev.Remarks {
-		fmt.Fprintf(&b, "%d. «%s» — %s (%s), стр. %d, область: x=%.3f, y=%.3f, w=%.3f, h=%.3f (доли листа, от левого верхнего угла). Вырезка: input/revision-%d/remarks/%d.png\n",
-			r.Idx, r.Text, r.DocumentTitle, r.FilePath, r.Page, r.X, r.Y, r.W, r.H, n, r.Idx)
+		fmt.Fprintf(&b, "%d. «%s» — %s (%s), стр. %d, область: x=%.3f, y=%.3f, w=%.3f, h=%.3f (доли листа, от левого верхнего угла).",
+			r.Idx, r.Text, r.DocumentTitle, r.FilePath, r.Page, r.X, r.Y, r.W, r.H)
+		if cropped[r.Idx] {
+			fmt.Fprintf(&b, " Вырезка: input/revision-%d/remarks/%d.png", n, r.Idx)
+		}
+		b.WriteString("\n")
 	}
 	b.WriteString("\n## Приложенные файлы\n\n")
 	if len(rev.Files) == 0 {

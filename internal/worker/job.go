@@ -13,7 +13,6 @@ import (
 
 	"github.com/luckydiss/studlance_ai/internal/httpapi"
 	"github.com/luckydiss/studlance_ai/internal/worker/client"
-	"github.com/luckydiss/studlance_ai/internal/worker/procwin"
 	"github.com/luckydiss/studlance_ai/prompts"
 )
 
@@ -44,7 +43,6 @@ type jobExec struct {
 	stage       string // current stage (draft|verify|revise)
 	inputFiles  []httpapi.WorkerInputFile
 	state       localState
-	officePIDs  []uint32
 	agentCancel context.CancelFunc // cancels the agent's stage context
 
 	cancelRequested atomic.Bool
@@ -88,9 +86,6 @@ func (j *jobExec) run(ctx context.Context) {
 	go j.heartbeatLoop(ctx, hbDone)
 	defer close(hbDone)
 
-	j.officePIDs = procwin.OfficePIDs()
-	defer procwin.KillNewOffice(j.officePIDs)
-
 	action := string(j.asn.Action)
 	j.stage = string(j.asn.Stage)
 	for {
@@ -112,6 +107,11 @@ func (j *jobExec) run(ctx context.Context) {
 			return
 		}
 		// Success: after-stage by stage kind (05-worker.md «После этапа»).
+		// A cancel that arrived after the agent exited still wins over commit.
+		if j.cancelRequested.Load() {
+			j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
+			return
+		}
 		switch j.stage {
 		case "draft":
 			if !j.commitDraft(ctx) {
@@ -122,11 +122,13 @@ func (j *jobExec) run(ctx context.Context) {
 			j.stage = "verify"
 			action = "start"
 			j.asn.Attempt = 0
+			j.state.StageStartedAt = time.Time{}
 			j.saveState()
 			j.log.Info("draft committed, starting verify")
 		case "verify":
 			v := 1
-			if !j.commitVersion(ctx, v, "draft") {
+			if !j.commitVersion(ctx, v, "draft") || j.cancelRequested.Load() {
+				j.finishCanceledIfRequested(ctx)
 				return
 			}
 			j.finish(ctx, httpapi.FinishRequestOutcomeOk, &v, "")
@@ -134,7 +136,8 @@ func (j *jobExec) run(ctx context.Context) {
 		case "revise":
 			v := j.asn.Version
 			prev := fmt.Sprintf("v%d", v-1)
-			if !j.commitVersion(ctx, v, prev) {
+			if !j.commitVersion(ctx, v, prev) || j.cancelRequested.Load() {
+				j.finishCanceledIfRequested(ctx)
 				return
 			}
 			j.finish(ctx, httpapi.FinishRequestOutcomeOk, &v, "")
@@ -143,6 +146,13 @@ func (j *jobExec) run(ctx context.Context) {
 			j.log.Error("unknown stage", "stage", j.stage)
 			return
 		}
+	}
+}
+
+// finishCanceledIfRequested reports canceled when the flag is set.
+func (j *jobExec) finishCanceledIfRequested(ctx context.Context) {
+	if j.cancelRequested.Load() && !j.stale.Load() {
+		j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
 	}
 }
 

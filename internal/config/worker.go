@@ -94,6 +94,20 @@ func LoadWorker(path string) (Worker, error) {
 	if w.Name == "" {
 		return Worker{}, errors.New("worker.toml: name is required")
 	}
+	if w.WorkDir == "" {
+		return Worker{}, errors.New("worker.toml: work_dir is required")
+	}
+	abs, err := filepath.Abs(w.WorkDir)
+	if err != nil {
+		return Worker{}, fmt.Errorf("worker.toml: work_dir: %w", err)
+	}
+	w.WorkDir = abs
+	if w.Codex.Command == "" {
+		w.Codex.Command = "codex"
+	}
+	if w.Claude.Command == "" {
+		w.Claude.Command = "claude"
+	}
 	return w, nil
 }
 

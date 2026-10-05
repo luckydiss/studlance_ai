@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -56,6 +57,16 @@ func runCodex(cfg *config) int {
 	em.emit(codexItem("item_1", "reasoning", map[string]any{
 		"text": "Planning the documents: an explanatory note and a calculation spreadsheet, then PDF previews.",
 	}))
+	if cfg.markers["#longline"] {
+		// A single JSONL line with 10 MB of command output (long-line handling
+		// in the worker's reader).
+		em.emit(codexItem("item_big", "command_execution", map[string]any{
+			"command":           "python3 -c \"print('x'*10000000)\"",
+			"exit_code":         0,
+			"aggregated_output": strings.Repeat("x", 10000000),
+			"status":            "completed",
+		}))
+	}
 	em.emit(codexItem("item_2", "command_execution", map[string]any{
 		"command":           "python3 build_report.py --out out",
 		"exit_code":         0,

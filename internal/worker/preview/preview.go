@@ -267,7 +267,7 @@ func DiffPages(prevPath, curPath string) ([]Box, error) {
 		}
 	}
 
-	boxes := collectBoxes(changed, rows)
+	boxes := collectBoxes(changed, cell, curH)
 	if len(boxes) > diffMaxBox {
 		return full, nil
 	}
@@ -283,8 +283,9 @@ func scaleGray(src image.Image, w int) *image.Gray {
 	return dst
 }
 
-// meanAbsDiff returns the mean absolute gray difference over the rectangle.
-func meanAbsDiff(a, b *image.Gray, x0, y0, x1, y1 int) int {
+// meanAbsDiff returns the mean absolute gray difference over the rectangle
+// on the 0–255 scale, without rounding: a mean of 6.4 is above diffThresh.
+func meanAbsDiff(a, b *image.Gray, x0, y0, x1, y1 int) float64 {
 	var sum, n int
 	for y := y0; y < y1; y++ {
 		for x := x0; x < x1; x++ {
@@ -299,12 +300,13 @@ func meanAbsDiff(a, b *image.Gray, x0, y0, x1, y1 int) int {
 	if n == 0 {
 		return 0
 	}
-	return sum / n
+	return float64(sum) / float64(n)
 }
 
 // collectBoxes merges changed cells into 4-connected regions and returns the
-// bounding box of each region in fractions 0–1 of the page.
-func collectBoxes(changed []bool, rows int) []Box {
+// bounding box of each region in fractions 0–1 of the page (X/W of its
+// width, Y/H of its height; the last cell row can be shorter than cellH).
+func collectBoxes(changed []bool, cellH, pageH int) []Box {
 	visited := make([]bool, len(changed))
 	var boxes []Box
 	for i, ch := range changed {
@@ -336,11 +338,13 @@ func collectBoxes(changed []bool, rows int) []Box {
 				}
 			}
 		}
+		y0 := minR * cellH
+		y1 := min((maxR+1)*cellH, pageH)
 		boxes = append(boxes, Box{
 			X: float64(minC) / diffCols,
-			Y: float64(minR) / float64(rows),
+			Y: float64(y0) / float64(pageH),
 			W: float64(maxC-minC+1) / diffCols,
-			H: float64(maxR-minR+1) / float64(rows),
+			H: float64(y1-y0) / float64(pageH),
 		})
 	}
 	return boxes

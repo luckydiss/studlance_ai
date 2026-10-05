@@ -3,18 +3,59 @@ package worker
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 
 	"github.com/luckydiss/studlance_ai/internal/config"
 )
 
+// fakeCodex/fakeClaude are built by TestMain.
+var fakeCodex, fakeClaude string
+
 // TestMain answers the cliVersion probe: re-executed with exactly one
 // --version arg (before the testing flags are parsed), it prints a version.
+// It also builds the fakeagent binaries (named codex/claude) for flow tests.
 func TestMain(m *testing.M) {
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		fmt.Println("studlance-test-cli 0.0.1")
 		os.Exit(0)
+	}
+	dir, err := os.MkdirTemp("", "fakeagent-build")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "flow tests: mktemp:", err)
+		os.Exit(1)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	bin := filepath.Join(dir, "fakeagent")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/fakeagent").CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "flow tests: build fakeagent: %v\n%s\n", err, out)
+		os.Exit(1)
+	}
+	raw, err := os.ReadFile(bin)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "flow tests:", err)
+		os.Exit(1)
+	}
+	for _, name := range []string{"codex", "claude"} {
+		p := filepath.Join(dir, name)
+		if runtime.GOOS == "windows" {
+			p += ".exe"
+		}
+		if err := os.WriteFile(p, raw, 0o755); err != nil {
+			fmt.Fprintln(os.Stderr, "flow tests:", err)
+			os.Exit(1)
+		}
+		if name == "codex" {
+			fakeCodex = p
+		} else {
+			fakeClaude = p
+		}
 	}
 	os.Exit(m.Run())
 }

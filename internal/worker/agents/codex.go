@@ -2,6 +2,7 @@ package agents
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -24,7 +25,10 @@ type codexEvent struct {
 	Type     string `json:"type"`
 	ThreadID string `json:"thread_id"`
 	Message  string `json:"message"`
-	Item     *struct {
+	// Truncated is set by the runner when the raw line was compacted before
+	// parsing (see truncateJSONLine); it is propagated into step payloads.
+	Truncated string `json:"_truncated"`
+	Item      *struct {
 		Type             string                   `json:"type"`
 		Text             string                   `json:"text"`
 		Command          string                   `json:"command"`
@@ -61,17 +65,48 @@ func (p *codexParser) Feed(line []byte, ts time.Time) {
 			p.usage.InputTokens += e.Usage.InputTokens
 			p.usage.CachedInputTokens += e.Usage.CachedInputTokens
 			p.usage.OutputTokens += e.Usage.OutputTokens
+			p.steps = append(p.steps, Step{
+				Ts:      ts,
+				Type:    "result",
+				Summary: fmt.Sprintf("готово: %s токенов", humanTokens(e.Usage.InputTokens+e.Usage.OutputTokens)),
+				Payload: noteTrunc(map[string]interface{}{
+					"input_tokens":        e.Usage.InputTokens,
+					"cached_input_tokens": e.Usage.CachedInputTokens,
+					"output_tokens":       e.Usage.OutputTokens,
+				}, e.Truncated),
+			})
 		}
-	case "turn.failed", "error":
-		msg := e.Message
-		if e.Error != nil && e.Error.Message != "" {
-			msg = e.Error.Message
-		}
-		if msg != "" {
+	case "turn.failed":
+		// Only turn.failed fails the run.
+		if msg := errorMessage(e); msg != "" {
 			p.fail(msg)
-			p.steps = append(p.steps, Step{Ts: ts, Type: "error", Summary: headRunes(msg, summaryRunes)})
+			p.steps = append(p.steps, Step{
+				Ts:      ts,
+				Type:    "error",
+				Summary: headRunes(msg, summaryRunes),
+				Payload: noteTrunc(nil, e.Truncated),
+			})
+		}
+	case "error":
+		// {"type":"error"} events are reconnects/warnings: they become error
+		// steps but never fail the run.
+		if msg := errorMessage(e); msg != "" {
+			p.steps = append(p.steps, Step{
+				Ts:      ts,
+				Type:    "error",
+				Summary: headRunes(msg, summaryRunes),
+				Payload: noteTrunc(nil, e.Truncated),
+			})
 		}
 	}
+}
+
+// errorMessage extracts the message of a turn.failed/error event.
+func errorMessage(e codexEvent) string {
+	if e.Error != nil && e.Error.Message != "" {
+		return e.Error.Message
+	}
+	return e.Message
 }
 
 // itemCompleted maps a completed codex item to a trace step.
@@ -117,6 +152,7 @@ func (p *codexParser) itemCompleted(e codexEvent, ts time.Time) {
 	default:
 		return
 	}
+	step.Payload = noteTrunc(step.Payload, e.Truncated)
 	p.steps = append(p.steps, step)
 }
 

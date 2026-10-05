@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -97,11 +98,20 @@ type harness struct {
 	workDir      string
 	logs         *bytes.Buffer
 
+	// gate, when non-nil, can hold all /api/worker/* requests (network outage
+	// simulation): gateBlock() blocks them until gateRelease is closed.
+	gate        *atomic.Bool
+	gateRelease chan struct{}
+
 	workerCancel context.CancelFunc
 	workerDone   chan error
 }
 
 func newHarness(t *testing.T) *harness {
+	return newHarnessGate(t, false)
+}
+
+func newHarnessGate(t *testing.T, withGate bool) *harness {
 	t.Helper()
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -121,9 +131,22 @@ func newHarness(t *testing.T) *harness {
 	q := queue.New(st, st.DB(), bl, hub, nil, queue.Options{ClaimWait: 2 * time.Second})
 	authSvc := auth.New(st, auth.Config{SessionTTL: time.Hour})
 	srv := httpapi.New(st, bl, authSvc, hub, q, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	ts := httptest.NewServer(srv.Handler())
-
-	h := &harness{t: t, st: st, srv: ts, hc: ts.Client(), workDir: t.TempDir(), logs: &bytes.Buffer{}}
+	handler := srv.Handler()
+	h := &harness{t: t, st: st, workDir: t.TempDir(), logs: &bytes.Buffer{}}
+	if withGate {
+		h.gate = &atomic.Bool{}
+		h.gateRelease = make(chan struct{})
+		inner := handler
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if h.gate.Load() && strings.HasPrefix(r.URL.Path, "/api/worker/") {
+				<-h.gateRelease
+			}
+			inner.ServeHTTP(w, r)
+		})
+	}
+	ts := httptest.NewServer(handler)
+	h.srv = ts
+	h.hc = ts.Client()
 	t.Cleanup(func() {
 		h.stopWorker()
 		ts.Close()
@@ -322,4 +345,16 @@ func revisionBody(t *testing.T, data string, files map[string]string) (io.Reader
 		t.Fatal(err)
 	}
 	return &buf, mw.FormDataContentType()
+}
+
+// poll is waitFor without failing.
+func (h *harness) poll(timeout time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return false
 }

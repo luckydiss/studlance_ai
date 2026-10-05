@@ -348,6 +348,27 @@ func (c *Client) do(ctx context.Context, method, rawURL string, newBody func() i
 	}
 }
 
+// IsRetryable reports whether err is worth retrying: network errors and 5xx
+// are transient; 4xx (stale lease, auth, not found, conflict, bad request)
+// are not.
+func IsRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrStaleLease) || errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrNotFound) {
+		return false
+	}
+	var ce *ConflictError
+	if errors.As(err, &ce) {
+		return false
+	}
+	var be *BadRequestError
+	if errors.As(err, &be) {
+		return false
+	}
+	return true
+}
+
 // responseError maps a non-2xx response to the package's error types. The
 // body is consumed by the decoding attempt.
 func responseError(resp *http.Response) error {

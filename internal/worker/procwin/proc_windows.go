@@ -7,6 +7,7 @@
 package procwin
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"sync"
@@ -50,44 +51,127 @@ func NewGroup() *Group {
 	return g
 }
 
-// Prepare is a no-op on Windows: processes join the job after Start.
-func (g *Group) Prepare(cmd *exec.Cmd) {}
+// Prepare makes the process start suspended, so it cannot spawn children in
+// the gap between Start and Add assigning it to the job.
+func (g *Group) Prepare(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &windows.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED}
+}
 
-// Add assigns the started process to the job. It must be called right after
-// cmd.Start, before the process can spawn children on its own.
+// Add assigns the started (suspended) process to the job, then resumes its
+// threads. The resume always runs, even when the assignment fails: a process
+// left suspended forever is worse than a reported error.
 func (g *Group) Add(cmd *exec.Cmd) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.err != nil {
-		return g.err
-	}
-	if g.closed {
-		return fmt.Errorf("procwin: job already closed")
-	}
 	if cmd.Process == nil {
 		return fmt.Errorf("procwin: process not started")
 	}
-	h, err := windows.OpenProcess(
-		windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_SET_INFORMATION,
-		false, uint32(cmd.Process.Pid))
-	if err != nil {
-		return fmt.Errorf("procwin: OpenProcess: %w", err)
+	pid := uint32(cmd.Process.Pid)
+
+	g.mu.Lock()
+	err := g.err
+	if err == nil && g.closed {
+		err = fmt.Errorf("procwin: job already closed")
 	}
-	defer func() { _ = windows.CloseHandle(h) }()
-	if err := windows.AssignProcessToJobObject(g.job, h); err != nil {
-		return fmt.Errorf("procwin: AssignProcessToJobObject: %w", err)
+	if err == nil {
+		var h windows.Handle
+		h, err = windows.OpenProcess(
+			windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_SET_INFORMATION,
+			false, pid)
+		if err != nil {
+			err = fmt.Errorf("procwin: OpenProcess: %w", err)
+		} else {
+			if aerr := windows.AssignProcessToJobObject(g.job, h); aerr != nil {
+				err = fmt.Errorf("procwin: AssignProcessToJobObject: %w", aerr)
+			}
+			_ = windows.CloseHandle(h)
+		}
 	}
-	return nil
+	g.mu.Unlock()
+
+	if rerr := resumeProcessThreads(pid); rerr != nil && err == nil {
+		err = rerr
+	}
+	return err
 }
 
-// Kill terminates all job processes and closes the handle. It is idempotent.
+// resumeProcessThreads resumes every thread of a process started with
+// CREATE_SUSPENDED. os/exec does not hand out the main thread handle, so the
+// threads are found through a Toolhelp snapshot instead.
+func resumeProcessThreads(pid uint32) error {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
+	if err != nil {
+		return fmt.Errorf("procwin: thread snapshot: %w", err)
+	}
+	defer func() { _ = windows.CloseHandle(snap) }()
+
+	var te windows.ThreadEntry32
+	te.Size = uint32(unsafe.Sizeof(te))
+	if err := windows.Thread32First(snap, &te); err != nil {
+		if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+			return nil
+		}
+		return fmt.Errorf("procwin: Thread32First: %w", err)
+	}
+	var firstErr error
+	for {
+		if te.OwnerProcessID == pid {
+			if err := resumeThread(te.ThreadID); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		if err := windows.Thread32Next(snap, &te); err != nil {
+			break
+		}
+	}
+	return firstErr
+}
+
+// resumeThread fully resumes a thread: ResumeThread returns the previous
+// suspend count, so it is called until the count reaches zero.
+func resumeThread(tid uint32) error {
+	h, err := windows.OpenThread(windows.THREAD_SUSPEND_RESUME, false, tid)
+	if err != nil {
+		return fmt.Errorf("procwin: OpenThread %d: %w", tid, err)
+	}
+	defer func() { _ = windows.CloseHandle(h) }()
+	for {
+		prev, err := windows.ResumeThread(h)
+		if err != nil {
+			return fmt.Errorf("procwin: ResumeThread %d: %w", tid, err)
+		}
+		if prev <= 1 {
+			return nil
+		}
+	}
+}
+
+// Kill terminates all job processes and closes the job handle. Idempotent.
 func (g *Group) Kill() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed || g.job == 0 {
 		return
 	}
-	g.closed = true
 	_ = windows.TerminateJobObject(g.job, 1)
-	_ = windows.CloseHandle(g.job)
+	g.closeLocked()
+}
+
+// Close releases the job handle without terminating the processes. The job
+// has KILL_ON_JOB_CLOSE, so closing the handle while an assigned process is
+// still alive kills the whole tree: callers must Close only after the
+// process has exited (e.g. deferred right after cmd.Wait). Idempotent.
+func (g *Group) Close() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.closeLocked()
+}
+
+func (g *Group) closeLocked() {
+	if g.closed {
+		return
+	}
+	g.closed = true
+	if g.job != 0 {
+		_ = windows.CloseHandle(g.job)
+		g.job = 0
+	}
 }

@@ -50,3 +50,7 @@ func (g *Group) Kill() {
 	g.killed = true
 	_ = syscall.Kill(-g.pgid, syscall.SIGKILL)
 }
+
+// Close is a no-op outside Windows: Kill signals the group and there is no
+// handle to release. It exists so callers can defer it unconditionally.
+func (g *Group) Close() {}

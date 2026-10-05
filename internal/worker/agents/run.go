@@ -2,6 +2,8 @@ package agents
 
 import (
 	"bufio"
+	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +11,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/luckydiss/studlance_ai/internal/worker/procwin"
@@ -22,20 +26,26 @@ type RunSpec struct {
 	Args    []string
 	Dir     string // cwd of the process
 	Prompt  string // written to stdin (UTF-8), then stdin is closed
-	// LogPath is the raw log: stdout lines as they are, stderr lines as
-	// {"_stderr":"…"}.
+	// LogPath is the raw log: stdout lines as they are (any length), stderr
+	// lines as {"_stderr":"…"}.
 	LogPath       string
 	ExpectSession string
 	// Send delivers batches of new steps; nil is allowed (steps are only
-	// parsed, never delivered).
+	// parsed, never delivered). Send runs on its own goroutine, so blocking
+	// inside it (network retries) never stalls the agent on a full pipe.
+	// The first Send error kills the process tree and fails Run. Steps
+	// arrive in Seq order with gaps where steps were dropped because the
+	// queue memory limit was hit.
 	Send func(steps []NewStep) error
 	// OnSession is called exactly once with the codex thread id or the
-	// confirmed claude session id, as soon as it is known.
+	// confirmed claude session id, as soon as it is known. It runs on its
+	// own goroutine so a slow callback cannot stall the reading; it must
+	// not block for long, and Run does not wait for it to finish.
 	OnSession func(id string)
 }
 
 // NewStep is a Step plus its run-wide sequence number, assigned by the
-// runner at send time, starting from 1.
+// runner when the step is queued, starting from 1.
 type NewStep struct {
 	Seq     int
 	Ts      time.Time
@@ -49,7 +59,11 @@ type Result struct {
 	ExitCode int
 	// Killed is true when the process was killed because ctx was done.
 	Killed bool
-	Usage  Usage
+	// KillTimeout is true when the process did not exit within
+	// killWaitTimeout after the kill: its stdout/stderr pipes were closed
+	// to unblock the readers and Wait was still awaited to the end.
+	KillTimeout bool
+	Usage       Usage
 	// AgentFailed is non-empty when the agent itself reported a failure.
 	AgentFailed string
 }
@@ -62,13 +76,35 @@ var (
 	flushBatchSize = 50
 )
 
-// scanBufSize is the bufio.Scanner capacity for agent output lines; codex
-// aggregated_output and claude tool results can be large.
-const scanBufSize = 1 << 20 // 1 MiB
+// maxQueueBytes caps the memory of the send queue (approximated as summary
+// length plus payload JSON length). Steps parsed past the cap are dropped:
+// they stay only in the raw log, but their Seq numbers are still consumed
+// so the gaps are visible on the server. Package-level so tests can shrink
+// it.
+var maxQueueBytes = 50 << 20 // 50 MiB
+
+// killWaitTimeout bounds how long Run waits for the process to exit after a
+// kill before closing its pipes. Package-level so tests can shrink it.
+var killWaitTimeout = 30 * time.Second
+
+// parserLineLimit is the stdout line length above which the line is
+// compacted by truncateJSONLine before parsing; the raw log always gets the
+// full line.
+const parserLineLimit = 1 << 20 // 1 MiB
+
+// truncateBudget is the target size of a compacted parser line.
+const truncateBudget = 900 * 1024 // ~900 KiB
+
+// minTruncField is the smallest string field truncateJSONLine will cut.
+const minTruncField = 1024
 
 // Run starts the agent process, pumps its stdout through the parser, mirrors
 // both streams into the raw log and delivers step batches until the process
 // exits or ctx is done (then the whole process tree is killed).
+//
+// Reading (stdout/stderr, plus parsing) and sending (RunSpec.Send) run on
+// separate goroutines: a stuck network never stalls the agent on a full
+// pipe.
 func Run(ctx context.Context, spec RunSpec) (Result, error) {
 	var parser Parser
 	switch spec.Agent {
@@ -131,85 +167,81 @@ func Run(ctx context.Context, spec RunSpec) (Result, error) {
 		}
 	}
 
-	lines := make(chan []byte, 16)
-	stdoutDone := make(chan struct{})
-	go func() {
-		defer close(stdoutDone)
-		defer close(lines)
-		scanLines(stdout, scanBufSize, func(line []byte) { lines <- line })
-	}()
-
-	stderrDone := make(chan struct{})
-	go func() {
-		defer close(stderrDone)
-		scanLines(stderr, scanBufSize, func(line []byte) { logStderr(string(line)) })
-	}()
+	// requestKill kills the whole tree exactly once: ctx cancellation and a
+	// Send error both go through it. killReq arms the wait-timeout watcher.
+	killReq := make(chan struct{})
+	var killOnce sync.Once
+	requestKill := func() {
+		killOnce.Do(func() {
+			group.Kill()
+			close(killReq)
+		})
+	}
+	var killTimeout atomic.Bool
 
 	// Reap the process once both pipes are drained; Wait must not run while
 	// the pipes are still being read.
+	stdoutDone := make(chan struct{})
+	stderrDone := make(chan struct{})
 	waitCh := make(chan error, 1)
+	waitDone := make(chan struct{})
 	go func() {
 		<-stdoutDone
 		<-stderrDone
 		waitCh <- cmd.Wait()
+		close(waitDone)
 	}()
 
 	// Kill the whole tree when the context is done; finished closes when Run
-	// is about to return so the watcher never lingers.
+	// is about to return so the watchers never linger.
 	finished := make(chan struct{})
 	defer close(finished)
 	go func() {
 		select {
 		case <-ctx.Done():
-			group.Kill()
+			requestKill()
 		case <-finished:
 		}
 	}()
 
-	var sendErr error
-	sent := 0
-	notified := false
-	ticker := time.NewTicker(flushInterval)
-	defer ticker.Stop()
-
-	flush := func() {
-		if sendErr != nil {
-			return
-		}
-		steps := parser.Steps()
-		if len(steps) == sent {
-			return
-		}
-		batch := make([]NewStep, 0, len(steps)-sent)
-		for i, s := range steps[sent:] {
-			batch = append(batch, NewStep{
-				Seq:     sent + i + 1,
-				Ts:      s.Ts,
-				Type:    s.Type,
-				Summary: s.Summary,
-				Payload: s.Payload,
-			})
-		}
-		if spec.Send != nil {
-			if err := spec.Send(batch); err != nil {
-				sendErr = err
-				group.Kill()
-				return
-			}
-		}
-		sent = len(steps)
-	}
-
-loop:
-	for {
+	// Bound the wait after a kill: if the process still has not exited,
+	// close the pipes so the readers and Wait can finish.
+	go func() {
 		select {
-		case line, ok := <-lines:
-			if !ok {
-				break loop
-			}
-			ts := time.Now().UTC()
+		case <-killReq:
+		case <-finished:
+			return
+		}
+		timer := time.NewTimer(killWaitTimeout)
+		defer timer.Stop()
+		select {
+		case <-waitDone:
+		case <-timer.C:
+			killTimeout.Store(true)
+			_ = stdout.Close()
+			_ = stderr.Close()
+		}
+	}()
+
+	queue := newStepQueue()
+
+	// The stdout reader owns the parser: it logs every line in full
+	// (however long), feeds compacted lines to the parser and queues new
+	// steps with their Seq numbers.
+	go func() {
+		br := bufio.NewReaderSize(stdout, 64<<10)
+		drained, seq := 0, 0
+		notified := false
+		readLines(br, func(line []byte) {
 			logLine(line)
-			parser.Feed(line, ts)
+			if len(line) > parserLineLimit {
+				compact, ok := truncateJSONLine(line)
+				if !ok {
+					return // stays only in the raw log
+				}
+				line = compact
+			}
+			parser.Feed(line, time.Now().UTC())
 			if !notified && spec.OnSession != nil {
 				id := parser.ThreadID()
 				if id == "" {
@@ -217,30 +249,63 @@ loop:
 				}
 				if id != "" {
 					notified = true
-					spec.OnSession(id)
+					go spec.OnSession(id)
 				}
 			}
-			if len(parser.Steps())-sent >= flushBatchSize {
-				flush()
+			steps := parser.Steps()
+			for _, s := range steps[drained:] {
+				seq++
+				if spec.Send != nil {
+					queue.push(NewStep{Seq: seq, Ts: s.Ts, Type: s.Type, Summary: s.Summary, Payload: s.Payload})
+				}
 			}
-		case <-ticker.C:
-			flush()
-		}
-	}
-	var waitErr error
-	if sendErr != nil {
-		// The process was killed; do not wait for it forever.
-		select {
-		case waitErr = <-waitCh:
-		case <-time.After(10 * time.Second):
-			return Result{}, fmt.Errorf("agents: send steps: %w (process still running after kill)", sendErr)
-		}
-	} else {
-		waitErr = <-waitCh
-	}
-	flush()
+			drained = len(steps)
+		})
+		queue.close()
+		close(stdoutDone)
+	}()
 
-	res := Result{Usage: parser.Usage()}
+	go func() {
+		br := bufio.NewReaderSize(stderr, 64<<10)
+		readLines(br, func(line []byte) {
+			logStderr(string(line))
+		})
+		close(stderrDone)
+	}()
+
+	// The sender is the only caller of Send; a blocking Send never stalls
+	// the readers.
+	senderDone := make(chan struct{})
+	var sendErr error
+	if spec.Send != nil {
+		go func() {
+			defer close(senderDone)
+			if err := queue.sendLoop(spec.Send); err != nil {
+				sendErr = err
+				requestKill()
+			}
+		}()
+	} else {
+		close(senderDone)
+	}
+
+	<-stdoutDone
+
+	// Final flush: wait for the sender to drain the queue, unless ctx is
+	// already done (then the process was killed; do not wait for the
+	// network).
+	flushed := false
+	select {
+	case <-senderDone:
+		flushed = true
+	case <-ctx.Done():
+	}
+	waitErr := <-waitCh
+	// The process is dead: release the job/group handle (KILL_ON_JOB_CLOSE
+	// would reap any stragglers spawned after the kill).
+	group.Close()
+
+	res := Result{Usage: parser.Usage(), KillTimeout: killTimeout.Load()}
 	if msg, ok := parser.Failed(); ok {
 		res.AgentFailed = msg
 	}
@@ -254,20 +319,198 @@ loop:
 			return res, fmt.Errorf("agents: wait: %w", waitErr)
 		}
 	}
-	if sendErr != nil {
+	if flushed && sendErr != nil {
 		return res, fmt.Errorf("agents: send steps: %w", sendErr)
 	}
 	return res, nil
 }
 
-// scanLines reads r line by line with a big buffer; lines longer than the
-// buffer stop the scan silently (they stay incomplete in the raw log).
-func scanLines(r io.Reader, bufSize int, fn func(line []byte)) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, bufSize), bufSize*4)
-	for sc.Scan() {
-		line := make([]byte, len(sc.Bytes()))
-		copy(line, sc.Bytes())
-		fn(line)
+// readLines reads r line by line with no length limit; fn gets every line
+// (empty ones included) without the trailing newline.
+func readLines(r *bufio.Reader, fn func(line []byte)) {
+	for {
+		line, err := r.ReadBytes('\n')
+		if len(line) > 0 {
+			fn(bytes.TrimSuffix(bytes.TrimSuffix(line, []byte{'\n'}), []byte{'\r'}))
+		}
+		if err != nil {
+			return
+		}
 	}
+}
+
+// stepQueue is the in-memory buffer between the parsing reader and the Send
+// goroutine.
+type stepQueue struct {
+	mu     sync.Mutex
+	signal chan struct{} // buffered 1: the batch is full or the queue closed
+	steps  []NewStep
+	bytes  int
+	closed bool
+	logged bool // the overflow loss was already logged
+}
+
+func newStepQueue() *stepQueue {
+	return &stepQueue{signal: make(chan struct{}, 1)}
+}
+
+// push appends a step unless the queue is over maxQueueBytes; the loss is
+// logged once to the runner's stderr (dropped steps stay in the raw log,
+// their Seq numbers are still consumed).
+func (q *stepQueue) push(s NewStep) {
+	size := len(s.Summary) + len(payloadJSON(s.Payload))
+	q.mu.Lock()
+	if q.bytes+size > maxQueueBytes {
+		if !q.logged {
+			q.logged = true
+			_, _ = fmt.Fprintf(os.Stderr,
+				"agents: send queue over %d bytes, dropping steps (they stay in the raw log; Seq gaps are expected)\n",
+				maxQueueBytes)
+		}
+		q.mu.Unlock()
+		return
+	}
+	q.bytes += size
+	q.steps = append(q.steps, s)
+	full := len(q.steps) >= flushBatchSize
+	q.mu.Unlock()
+	if full {
+		q.notify()
+	}
+}
+
+// take returns and removes all pending steps; closed reports whether the
+// reader is done and no more steps will come.
+func (q *stepQueue) take() (batch []NewStep, closed bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	batch = q.steps
+	q.steps = nil
+	q.bytes = 0
+	return batch, q.closed
+}
+
+// close marks the queue complete and wakes the sender for the final flush.
+func (q *stepQueue) close() {
+	q.mu.Lock()
+	q.closed = true
+	q.mu.Unlock()
+	q.notify()
+}
+
+func (q *stepQueue) notify() {
+	select {
+	case q.signal <- struct{}{}:
+	default:
+	}
+}
+
+// sendLoop flushes queued steps through send until the queue is closed and
+// drained: a batch goes out every flushInterval or once flushBatchSize
+// steps are pending, whichever comes first. send may block arbitrarily long.
+func (q *stepQueue) sendLoop(send func([]NewStep) error) error {
+	ticker := time.NewTicker(flushInterval)
+	defer ticker.Stop()
+	for {
+		batch, closed := q.take()
+		if len(batch) > 0 {
+			if err := send(batch); err != nil {
+				return err
+			}
+			continue
+		}
+		if closed {
+			return nil
+		}
+		select {
+		case <-q.signal:
+		case <-ticker.C:
+		}
+	}
+}
+
+// payloadJSON sizes a payload for the queue memory estimate.
+func payloadJSON(payload map[string]interface{}) []byte {
+	if payload == nil {
+		return nil
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// truncateJSONLine compacts an over-long stdout line for the parser: the
+// longest string fields (at any nesting level) keep only their tails until
+// the whole line roughly fits truncateBudget, and a "_truncated" note
+// records how many bytes were removed. ok is false when the line is not a
+// JSON object; such lines are not fed to the parser at all.
+func truncateJSONLine(line []byte) (compact []byte, ok bool) {
+	var doc map[string]interface{}
+	if err := json.Unmarshal(line, &doc); err != nil {
+		return nil, false
+	}
+
+	// field is one long string found in the document; set writes its
+	// truncated value back into the parent container.
+	type field struct {
+		s   string
+		set func(string)
+	}
+	var fields []field
+	var walk func(v interface{})
+	walk = func(v interface{}) {
+		switch v := v.(type) {
+		case map[string]interface{}:
+			for k, e := range v {
+				if s, ok := e.(string); ok {
+					if len(s) >= minTruncField {
+						fields = append(fields, field{s: s, set: func(n string) { v[k] = n }})
+					}
+					continue
+				}
+				walk(e)
+			}
+		case []interface{}:
+			for i, e := range v {
+				if s, ok := e.(string); ok {
+					if len(s) >= minTruncField {
+						fields = append(fields, field{s: s, set: func(n string) { v[i] = n }})
+					}
+					continue
+				}
+				walk(e)
+			}
+		}
+	}
+	walk(doc)
+	slices.SortFunc(fields, func(a, b field) int { return cmp.Compare(len(b.s), len(a.s)) })
+
+	removed := 0
+	excess := len(line) - truncateBudget
+	for _, f := range fields {
+		if excess <= 0 {
+			break
+		}
+		keep := len(f.s) - excess
+		if keep < minTruncField {
+			keep = minTruncField
+		}
+		if keep >= len(f.s) {
+			continue
+		}
+		// The tail usually carries the interesting part (the error); the
+		// cut lands on a rune boundary.
+		t := tailBytes(f.s, keep)
+		removed += len(f.s) - len(t)
+		excess -= len(f.s) - len(t)
+		f.set(t)
+	}
+	doc["_truncated"] = fmt.Sprintf("…обрезано %d байт", removed)
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }

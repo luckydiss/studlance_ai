@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/luckydiss/studlance_ai/internal/worker/procwin"
 )
 
 // convertTimeout bounds a single office-to-PDF conversion (05-worker.md).
@@ -25,6 +27,7 @@ switch ($app) {
   "word" {
     $word = New-Object -ComObject Word.Application
     $word.Visible = $false
+    $word.DisplayAlerts = 0
     try {
       $doc = $word.Documents.Open($in, $false, $true)
       try {
@@ -91,6 +94,10 @@ func ConvertToPDF(ctx context.Context, srcPath, dstPath string) (bool, error) {
 		return false, nil
 	}
 
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+		return false, fmt.Errorf("preview: mkdir %s: %w", filepath.Dir(dstPath), err)
+	}
+
 	ps1, err := os.CreateTemp("", "studlance-convert-*.ps1")
 	if err != nil {
 		return false, fmt.Errorf("preview: create script: %w", err)
@@ -104,11 +111,17 @@ func ConvertToPDF(ctx context.Context, srcPath, dstPath string) (bool, error) {
 		return false, fmt.Errorf("preview: write script: %w", err)
 	}
 
+	// Snapshot the running Office processes: if the conversion times out or
+	// fails, the COM servers it started must not be left behind (they live
+	// outside this process tree).
+	before := procwin.OfficePIDs()
+
 	ctx, cancel := context.WithTimeout(ctx, convertTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "powershell.exe",
 		"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1.Name(), srcPath, dstPath, app)
 	if out, err := cmd.CombinedOutput(); err != nil {
+		procwin.KillNewOffice(before)
 		return false, fmt.Errorf("preview: convert %s: %w: %s", srcPath, err, strings.TrimSpace(string(out)))
 	}
 

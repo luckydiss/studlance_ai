@@ -31,7 +31,7 @@ const lineDelayMs = 30
 
 // knownMarkers are the behavior markers recognized in the prompt text.
 var knownMarkers = []string{
-	"#ask", "#fail-draft", "#fail-verify", "#fail-once", "#hang", "#slow", "#no-pdf",
+	"#ask", "#fail-draft", "#fail-verify", "#fail-verify-once", "#fail-verify-twice", "#fail-once", "#hang", "#slow", "#no-pdf", "#longline",
 }
 
 // script is the parsed FAKEAGENT_SCRIPT environment variable.
@@ -111,7 +111,7 @@ func parseConfig(args []string) (*config, error) {
 		corpus += "\n" + string(raw)
 	}
 	for _, m := range knownMarkers {
-		if strings.Contains(corpus, m) {
+		if hasMarker(corpus, m) {
 			cfg.markers[m] = true
 		}
 	}
@@ -174,6 +174,27 @@ func parseClaudeArgs(args []string) (resume bool, sessionID string) {
 		}
 	}
 	return false, ""
+}
+
+// hasMarker finds marker at a word boundary: "#fail-verify" must not match
+// "#fail-verify-once".
+func hasMarker(s, marker string) bool {
+	for i := 0; ; {
+		idx := strings.Index(s[i:], marker)
+		if idx < 0 {
+			return false
+		}
+		end := i + idx + len(marker)
+		if end >= len(s) || !isMarkerChar(rune(s[end])) {
+			return true
+		}
+		i = end
+	}
+}
+
+func isMarkerChar(r rune) bool {
+	return r == '-' || r == '_' ||
+		('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9')
 }
 
 // emitter writes JSONL events to stdout with a streaming-like delay.
