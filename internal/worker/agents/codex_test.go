@@ -263,3 +263,34 @@ func TestCodexRealOutOfCredits(t *testing.T) {
 		t.Fatalf("Failed = %v %q", failed, msg)
 	}
 }
+
+// TestCodexRealBeamPartial parses a real codex-cli 0.160.0 log (recorded
+// 2026-10-05 in C:\work\job on a fictional beam-calc task; the workspace ran
+// out of credits mid-run, hence the trailing error + turn.failed). Sanitized:
+// username replaced, no personal data.
+func TestCodexRealBeamPartial(t *testing.T) {
+	p := NewCodexParser()
+	feedFile(t, p, "testdata/codex_real_beam_partial.jsonl")
+	if p.ThreadID() == "" {
+		t.Fatal("no thread id")
+	}
+	types := map[string]int{}
+	for _, s := range p.Steps() {
+		types[s.Type]++
+	}
+	for _, want := range []string{"command", "file", "message", "web", "error"} {
+		if types[want] == 0 {
+			t.Fatalf("no %q step; types = %v", want, types)
+		}
+	}
+	msg, failed := p.Failed()
+	if !failed || !strings.Contains(msg, "out of credits") {
+		t.Fatalf("Failed = %v %q", failed, msg)
+	}
+	// Every command step keeps the 300-rune summary limit on real data.
+	for _, s := range p.Steps() {
+		if len([]rune(s.Summary)) > 300 {
+			t.Fatalf("summary over 300 runes: %.40s", s.Summary)
+		}
+	}
+}
