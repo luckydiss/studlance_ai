@@ -160,6 +160,7 @@ func (s *Server) AdminRetryJob(ctx context.Context, request AdminRetryJobRequest
 		return nil, err
 	}
 	s.recordEvent(ctx, j.ID, "retried", false, map[string]interface{}{"by": "admin"})
+	s.queue.Wake()
 	s.publishJob(ctx, j)
 	detail, _, dErr := s.adminDetail(ctx, j.ID)
 	if dErr != nil {

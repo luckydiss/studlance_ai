@@ -4,6 +4,7 @@ package jobs
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/luckydiss/studlance_ai/internal/store"
 )
@@ -23,6 +24,9 @@ const (
 )
 
 // ClientStatusFor maps internal status/stage to the client-facing status.
+// An order re-queued after a failed attempt (attempt = 1) keeps its previous
+// client status ("Выполняем" / "Дорабатываем"), not "Заказ принят"
+// (03-lifecycle.md).
 func ClientStatusFor(j store.Job) ClientStatus {
 	switch j.Status {
 	case store.StatusUploading:
@@ -31,7 +35,7 @@ func ClientStatusFor(j store.Job) ClientStatus {
 		if j.Stage == store.StageRevise {
 			return ClientRevising
 		}
-		if j.CurrentVersion == 0 {
+		if j.CurrentVersion == 0 && j.Attempt == 0 {
 			return ClientAccepted
 		}
 		return ClientInProgress
@@ -90,12 +94,20 @@ type StatusStep struct {
 	State string
 }
 
+// Progress carries the worker-driven facts StatusSteps needs (PR 3): when the
+// draft stage started and whether codex already produced a trace step.
+type Progress struct {
+	Now              time.Time
+	DraftStartedAt   *time.Time
+	CodexDraftTraced bool
+}
+
 // StatusSteps builds the status window steps for a normal (non-revision) order.
 // Steps before the current one are "done", the current one is "active" and the
-// rest are "pending". The draft_started / first-trace heuristics from
-// 03-lifecycle.md need worker events (PR 3); here we derive progress from the
-// job stage so that during verify the "Делаем работу" step is already done.
-func StatusSteps(j store.Job) []StatusStep {
+// rest are "pending". "Делаем работу" is done once the first codex trace step
+// of the draft stage arrives, or once the draft stage runs for at least a
+// minute (03-lifecycle.md).
+func StatusSteps(j store.Job, p Progress) []StatusStep {
 	if j.Stage == store.StageRevise || j.PendingRevision != nil {
 		return revisionSteps(j)
 	}
@@ -103,8 +115,11 @@ func StatusSteps(j store.Job) []StatusStep {
 	accepted := j.Status != store.StatusUploading
 	draftStarted := j.Stage != "" || j.CurrentVersion > 0 || j.Status == store.StatusDone ||
 		j.Status == store.StatusNeedsInput || j.Status == store.StatusFailed
-	// codex finished (work done) once verify started or a version exists.
-	workDone := j.CurrentVersion > 0 || j.Status == store.StatusDone ||
+	// codex finished (work done) once verify started or a version exists, or
+	// once draft demonstrably produces work (first trace step / 1 minute in).
+	workDone := p.CodexDraftTraced ||
+		(p.DraftStartedAt != nil && !p.DraftStartedAt.After(p.Now.Add(-time.Minute))) ||
+		j.CurrentVersion > 0 || j.Status == store.StatusDone ||
 		(j.Status == store.StatusRunning && j.Stage == store.StageVerify)
 	verifyStarted := j.CurrentVersion > 0 || j.Status == store.StatusDone
 	done := j.Status == store.StatusDone

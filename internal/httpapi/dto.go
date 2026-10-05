@@ -62,7 +62,7 @@ func (s *Server) adminJobDetail(ctx context.Context, j store.Job) (AdminJobDetai
 		UpdatedAt:        j.UpdatedAt,
 		Prompt:           j.Prompt,
 		Question:         j.Question,
-		StatusSteps:      statusSteps(j),
+		StatusSteps:      s.statusSteps(ctx, j),
 		InputFiles:       []InputFile{},
 		Versions:         []Version{},
 		PlannedDocuments: []PlannedDocument{},
@@ -132,6 +132,8 @@ func (s *Server) adminJobDetail(ctx context.Context, j store.Job) (AdminJobDetai
 	if len(draftDocs) > 0 {
 		detail.Draft = &DraftSnapshot{Documents: s.documentViews(ctx, j.ID, draftDocs, true)}
 	}
+
+	detail.Verification = s.latestVerification(ctx, j)
 
 	runs, err := s.store.AgentRunsByJob(ctx, j.ID)
 	if err != nil {
@@ -216,7 +218,7 @@ func (s *Server) clientJobDetail(ctx context.Context, j store.Job) (ClientJobDet
 		CanCancel:      jobs.CanCancel(j),
 		CanRevise:      jobs.CanRevise(j),
 		CanAnswer:      jobs.CanAnswer(j),
-		StatusSteps:    statusSteps(j),
+		StatusSteps:    s.statusSteps(ctx, j),
 		InputFiles:     []InputFile{},
 		Versions:       []Version{},
 		Revisions:      []Revision{},
@@ -257,13 +259,47 @@ func (s *Server) clientJobDetail(ctx context.Context, j store.Job) (ClientJobDet
 	return detail, nil
 }
 
-func statusSteps(j store.Job) []StatusStep {
-	steps := jobs.StatusSteps(j)
+// statusSteps builds the client status window with worker-driven progress.
+func (s *Server) statusSteps(ctx context.Context, j store.Job) []StatusStep {
+	steps := jobs.StatusSteps(j, s.jobProgress(ctx, j))
 	out := make([]StatusStep, 0, len(steps))
 	for _, st := range steps {
 		out = append(out, StatusStep{Title: st.Title, State: stepStateType(st.State)})
 	}
 	return out
+}
+
+// jobProgress collects the facts StatusSteps needs: when the draft stage
+// started and whether codex already produced a trace step for it.
+func (s *Server) jobProgress(ctx context.Context, j store.Job) jobs.Progress {
+	p := jobs.Progress{Now: s.now()}
+	if events, err := s.store.EventsByJob(ctx, j.ID); err == nil {
+		for _, e := range events {
+			if e.Kind != "stage_started" {
+				continue
+			}
+			var d struct {
+				Stage string `json:"stage"`
+			}
+			if json.Unmarshal([]byte(e.Data), &d) == nil && d.Stage == store.StageDraft {
+				t := e.Ts
+				p.DraftStartedAt = &t
+				break
+			}
+		}
+	}
+	if runs, err := s.store.AgentRunsByJob(ctx, j.ID); err == nil {
+		for _, r := range runs {
+			if r.Agent != "codex" || r.Stage != store.StageDraft {
+				continue
+			}
+			if steps, err := s.store.TraceStepsByRun(ctx, r.ID, 0, 1); err == nil && len(steps) > 0 {
+				p.CodexDraftTraced = true
+				break
+			}
+		}
+	}
+	return p
 }
 
 // versionViews builds version views (ascending) with documents.
@@ -317,9 +353,12 @@ func (s *Server) documentViews(ctx context.Context, jobID string, docs []store.D
 		if f, err := s.store.FileByBlobKey(ctx, s.versionFileKey(jobID, d)); err == nil {
 			documents.Size = int(f.Size)
 		}
-		if admin {
+		switch {
+		case admin && d.Snapshot == store.SnapshotDraft:
+			documents.DownloadUrl = adminDraftFileURL(jobID, d.FilePath)
+		case admin:
 			documents.DownloadUrl = adminFileURL(jobID, d.Version, d.FilePath)
-		} else {
+		default:
 			documents.DownloadUrl = clientFileURL(jobID, d.Version, d.FilePath)
 		}
 		out = append(out, documents)
@@ -329,6 +368,9 @@ func (s *Server) documentViews(ctx context.Context, jobID string, docs []store.D
 
 // versionFileKey returns the blob key of a document's out/ file for a version.
 func (s *Server) versionFileKey(jobID string, d store.Document) string {
+	if d.Snapshot == store.SnapshotDraft {
+		return fmt.Sprintf("jobs/%s/draft/out/%s", jobID, d.FilePath)
+	}
 	return fmt.Sprintf("jobs/%s/v%d/out/%s", jobID, d.Version, d.FilePath)
 }
 
@@ -384,46 +426,64 @@ func escFileSegment(p string) string {
 	return url.PathEscape(p)
 }
 
-func clientPageURL(jobID string, version int64, documentID string, page int64) string {
-	return fmt.Sprintf("/api/client/jobs/%s/versions/%d/pages/%s/%d.png", jobID, version, documentID, page)
+// adminDraftFileURL builds the download URL of a draft document file.
+func adminDraftFileURL(jobID, path string) string {
+	return fmt.Sprintf("/api/admin/jobs/%s/draft/files/%s", jobID, escFileSegment(path))
 }
 
-func clientThumbURL(jobID string, version int64, documentID string, page int64) string {
-	return fmt.Sprintf("/api/client/jobs/%s/versions/%d/thumbs/%s/%d.png", jobID, version, documentID, page)
-}
-
-func adminPageURL(jobID string, version int64, documentID string, page int64) string {
-	return fmt.Sprintf("/api/admin/jobs/%s/versions/%d/pages/%s/%d.png", jobID, version, documentID, page)
-}
-
-func adminThumbURL(jobID string, version int64, documentID string, page int64) string {
-	return fmt.Sprintf("/api/admin/jobs/%s/versions/%d/thumbs/%s/%d.png", jobID, version, documentID, page)
-}
-
-// pageViews builds Page objects for a document.
-func (s *Server) pageViews(jobID string, version int64, documentID string, pages []store.Page, admin bool) []Page {
+// pageViewsBase builds Page objects under the given collection base URL
+// (e.g. /api/client/jobs/<id>/versions/1 or /api/admin/jobs/<id>/draft).
+func pageViewsBase(base, documentID string, pages []store.Page) []Page {
 	out := make([]Page, 0, len(pages))
 	for _, p := range pages {
 		boxes := []ChangedBox{}
 		if p.ChangedBoxes != "" {
 			_ = json.Unmarshal([]byte(p.ChangedBoxes), &boxes)
 		}
-		view := Page{
+		out = append(out, Page{
 			Page:         int(p.Page),
 			Width:        int(p.Width),
 			Height:       int(p.Height),
 			ChangedBoxes: boxes,
-		}
-		if admin {
-			view.ImageUrl = adminPageURL(jobID, version, documentID, p.Page)
-			view.ThumbUrl = adminThumbURL(jobID, version, documentID, p.Page)
-		} else {
-			view.ImageUrl = clientPageURL(jobID, version, documentID, p.Page)
-			view.ThumbUrl = clientThumbURL(jobID, version, documentID, p.Page)
-		}
-		out = append(out, view)
+			ImageUrl:     fmt.Sprintf("%s/pages/%s/%d.png", base, documentID, p.Page),
+			ThumbUrl:     fmt.Sprintf("%s/thumbs/%s/%d.png", base, documentID, p.Page),
+		})
 	}
 	return out
+}
+
+// latestVerification loads the verification JSON of the newest version that
+// has one (found by scanning the job's blobs), so the admin sees it even
+// before finish releases the version.
+func (s *Server) latestVerification(ctx context.Context, j store.Job) *Verification {
+	infos, err := s.blobs.List(ctx, "jobs/"+j.ID)
+	if err != nil {
+		return nil
+	}
+	best := -1
+	for _, info := range infos {
+		var n int
+		if _, err := fmt.Sscanf(info.Key, "jobs/"+j.ID+"/v%d/verification.json", &n); err == nil && n > best {
+			best = n
+		}
+	}
+	for v := best; v >= 1; v-- {
+		rc, _, err := s.blobs.Open(ctx, fmt.Sprintf("jobs/%s/v%d/verification.json", j.ID, v))
+		if err != nil {
+			continue
+		}
+		var ver Verification
+		dErr := json.NewDecoder(rc).Decode(&ver)
+		_ = rc.Close()
+		if dErr != nil {
+			continue
+		}
+		if ver.Remaining == nil {
+			ver.Remaining = []VerificationItem{}
+		}
+		return &ver
+	}
+	return nil
 }
 
 // parsePageKey parses "{document_id}/{page}.png" path parameters.

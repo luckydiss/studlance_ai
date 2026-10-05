@@ -638,7 +638,7 @@ paths:
     get:
       tags: [admin]
       operationId: adminJobStream
-      summary: SSE-поток заказа для пульта
+      summary: SSE-поток заказа (события и шаги трейса)
       responses:
         "200":
           description: text/event-stream (snapshot, job, steps, ping)
@@ -646,6 +646,220 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/admin/jobs/{id}/draft/documents/{document_id}/pages:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+      - $ref: "#/components/parameters/DocumentId"
+    get:
+      tags: [admin]
+      operationId: adminListDraftPages
+      summary: Страницы документа черновика
+      responses:
+        "200":
+          description: Страницы
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PageList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/admin/jobs/{id}/draft/pages/{document_id}/{page}:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/PageNumber"
+    get:
+      tags: [admin]
+      operationId: adminGetDraftPage
+      summary: Картинка страницы черновика
+      responses:
+        "200":
+          description: PNG страницы
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/admin/jobs/{id}/draft/thumbs/{document_id}/{page}:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/PageNumber"
+    get:
+      tags: [admin]
+      operationId: adminGetDraftThumb
+      summary: Мини-копия страницы черновика
+      responses:
+        "200":
+          description: PNG мини-копии
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/admin/jobs/{id}/draft/files/{path}:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Путь файла черновика (один сегмент, %2F для вложенности)
+    get:
+      tags: [admin]
+      operationId: adminGetDraftFile
+      summary: Скачать файл черновика
+      responses:
+        "200":
+          description: Файл
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/admin/jobs/{id}/versions/{v}/documents/{document_id}/pages:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+      - $ref: "#/components/parameters/VersionPath"
+      - $ref: "#/components/parameters/DocumentId"
+    get:
+      tags: [admin]
+      operationId: adminListVersionPages
+      summary: Страницы документа версии (включая незавершённую)
+      responses:
+        "200":
+          description: Страницы
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PageList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/admin/jobs/{id}/versions/{v}/pages/{document_id}/{page}:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+      - $ref: "#/components/parameters/VersionPath"
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/PageNumber"
+    get:
+      tags: [admin]
+      operationId: adminGetVersionPage
+      summary: Картинка страницы версии
+      responses:
+        "200":
+          description: PNG страницы
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/admin/jobs/{id}/versions/{v}/thumbs/{document_id}/{page}:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+      - $ref: "#/components/parameters/VersionPath"
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/PageNumber"
+    get:
+      tags: [admin]
+      operationId: adminGetVersionThumb
+      summary: Мини-копия страницы версии
+      responses:
+        "200":
+          description: PNG мини-копии
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/admin/jobs/{id}/versions/{v}/files/{path}:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+      - $ref: "#/components/parameters/VersionPath"
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Путь файла в комплекте (один сегмент, %2F для вложенности)
+    get:
+      tags: [admin]
+      operationId: adminGetVersionFile
+      summary: Скачать файл комплекта (без проверки владельца)
+      responses:
+        "200":
+          description: Файл
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/admin/jobs/{id}/versions/{v}/bundle.zip:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+      - $ref: "#/components/parameters/VersionPath"
+    get:
+      tags: [admin]
+      operationId: adminGetVersionBundle
+      summary: Архив комплекта версии
+      responses:
+        "200":
+          description: ZIP-архив
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -741,8 +955,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HeartbeatResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
   /api/worker/jobs/{id}/input:
@@ -760,8 +978,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WorkerInputFileList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
   /api/worker/jobs/{id}/input/{path}:
@@ -785,8 +1007,12 @@ paths:
               schema:
                 type: string
                 format: binary
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
   /api/worker/jobs/{id}/runs:
@@ -809,8 +1035,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreateRunResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
   /api/worker/jobs/{id}/runs/{run_id}:
@@ -834,8 +1064,12 @@ paths:
       responses:
         "204":
           description: Обновлено
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
   /api/worker/jobs/{id}/runs/{run_id}/steps:
@@ -859,8 +1093,12 @@ paths:
       responses:
         "204":
           description: Принято (дубликаты игнорируются)
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
   /api/worker/jobs/{id}/runs/{run_id}/log:
@@ -886,8 +1124,12 @@ paths:
       responses:
         "204":
           description: Принято
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
   /api/worker/jobs/{id}/state:
@@ -906,8 +1148,12 @@ paths:
       responses:
         "204":
           description: Принято
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
   /api/worker/jobs/{id}/snapshot/{snapshot}/files:
@@ -934,8 +1180,12 @@ paths:
       responses:
         "204":
           description: Принято
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
   /api/worker/jobs/{id}/snapshot/{snapshot}/pages/{document_idx}/{page}:
@@ -967,8 +1217,12 @@ paths:
       responses:
         "204":
           description: Принято
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
   /api/worker/jobs/{id}/snapshot/{snapshot}/thumbs/{document_idx}/{page}:
@@ -1000,8 +1254,12 @@ paths:
       responses:
         "204":
           description: Принято
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
   /api/worker/jobs/{id}/input/revision/{n}/remarks/{idx}:
@@ -1032,8 +1290,12 @@ paths:
       responses:
         "204":
           description: Принято
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
   /api/worker/jobs/{id}/snapshot/{snapshot}/commit:
@@ -1053,8 +1315,12 @@ paths:
       responses:
         "204":
           description: Принято
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
   /api/worker/jobs/{id}/question:
@@ -1073,8 +1339,12 @@ paths:
       responses:
         "204":
           description: Принято
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
   /api/worker/jobs/{id}/finish:
@@ -1093,8 +1363,12 @@ paths:
       responses:
         "204":
           description: Принято
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StaleLease"
 

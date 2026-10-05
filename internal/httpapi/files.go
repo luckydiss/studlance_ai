@@ -30,12 +30,6 @@ type parsedRemarkInput struct {
 	Text       string  `json:"text"`
 }
 
-// revisionFile is one attached file from a revision multipart request.
-type revisionFile struct {
-	Filename string
-	Content  io.Reader
-}
-
 // openBlob opens a blob or returns an error suitable for a 404 response.
 func (s *Server) openBlob(ctx context.Context, key string) (blobs.ReadSeekCloser, blobs.Info, error) {
 	rc, info, err := s.blobs.Open(ctx, key)

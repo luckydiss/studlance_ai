@@ -39,6 +39,10 @@ func Open(ctx context.Context, path string) (*Store, error) {
 // Close closes the database.
 func (s *Store) Close() error { return s.sql.Close() }
 
+// DB returns the underlying database handle. internal/queue uses it to run
+// BEGIN IMMEDIATE transactions on a dedicated connection (09-tasks.md, PR 3).
+func (s *Store) DB() *sql.DB { return s.sql }
+
 // Migrate applies embedded goose migrations.
 func (s *Store) Migrate(ctx context.Context) error {
 	goose.SetBaseFS(store.Migrations)

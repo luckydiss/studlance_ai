@@ -69,17 +69,17 @@ func TestStatusStepStates(t *testing.T) {
 	}
 
 	verify := store.Job{Status: store.StatusRunning, Stage: store.StageVerify}
-	if got := state(StatusSteps(verify)); !eq(got, []string{StepDone, StepDone, StepDone, StepActive, StepPending}) {
+	if got := state(StatusSteps(verify, Progress{})); !eq(got, []string{StepDone, StepDone, StepDone, StepActive, StepPending}) {
 		t.Fatalf("verify stages %v", got)
 	}
 
 	queued := store.Job{Status: store.StatusQueued, Stage: store.StageDraft}
-	if got := state(StatusSteps(queued)); !eq(got, []string{StepDone, StepDone, StepActive, StepPending, StepPending}) {
+	if got := state(StatusSteps(queued, Progress{})); !eq(got, []string{StepDone, StepDone, StepActive, StepPending, StepPending}) {
 		t.Fatalf("queued stages %v", got)
 	}
 
 	done := store.Job{Status: store.StatusDone, CurrentVersion: 1}
-	if got := state(StatusSteps(done)); !eq(got, []string{StepDone, StepDone, StepDone, StepDone, StepDone}) {
+	if got := state(StatusSteps(done, Progress{})); !eq(got, []string{StepDone, StepDone, StepDone, StepDone, StepDone}) {
 		t.Fatalf("done stages %v", got)
 	}
 }
