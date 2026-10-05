@@ -22,7 +22,7 @@
 
 ## PR 3. Очередь и API воркера
 
-- `internal/queue`: выдача (`BEGIN IMMEDIATE`, закрепление за воркером, приоритет: заказы этого воркера с истёкшим lease, затем `queued` по `created_at`), lease, heartbeat с флагом отмены, fencing на каждой записи, авто-повтор, таймаут этапа, фоновая отметка `needs_attention` (раз в минуту).
+- `internal/queue`: выдача (`BEGIN IMMEDIATE`, закрепление за воркером, приоритет: заказы этого воркера в `running` — как `continue`, затем его `queued`, затем ничьи `queued` по `created_at`), lease, heartbeat с флагом отмены, fencing на каждой записи, авто-повтор, таймаут этапа, фоновая отметка `needs_attention` (раз в минуту).
 - Обработчики `/api/worker/*` по [04](04-api.md#воркер--apiworker), включая снимки, `commit`, вопрос, `finish`; формирование `Assignment` (`start | continue | answer | revise`).
 
 **Принять, если:** тесты на имитации воркера (HTTP-клиент в тесте): полный путь заказа до `done`; вопрос → ответ → `action: answer`; доработка → `action: revise`, версия 2; сбой → авто-повтор (`attempt = 1`) → второй сбой → `failed` + `needs_attention`; истёкший lease → повторная выдача тому же воркеру с `action: continue` и новым epoch; запись со старым epoch → 409 `stale_lease`; повтор пачки шагов не дублирует; отмена во время `running` → флаг в heartbeat → `canceled`; два параллельных `claim` не получают один заказ.
