@@ -33,14 +33,26 @@ jobs:
         with:
           go-version: "1.24"
           cache: true
-      - name: install sqlc
-        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.28.0
-      - name: go generate
-        run: go generate ./...
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: install tools
+        run: |
+          go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.28.0
+          go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.4.1
+      - name: install web deps
+        run: pnpm -C web install --frozen-lockfile
+      - name: generate
+        run: make generate
       - name: check diff
         run: |
           if [ -n "$(git status --porcelain)" ]; then
-            echo "::error::go generate produced changes; commit generated code";
+            echo "::error::generate produced changes; commit generated code";
             git diff;
             exit 1;
           fi

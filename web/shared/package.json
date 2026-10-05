@@ -11,9 +11,14 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
+    "generate": "openapi-typescript ../../api/openapi.yaml -o ./src/api/types.gen.ts",
     "test": "echo \"no tests\" && exit 0"
   },
+  "dependencies": {
+    "openapi-fetch": "0.13.4"
+  },
   "devDependencies": {
+    "openapi-typescript": "7.4.4",
     "typescript": "5.7.2"
   }
 }

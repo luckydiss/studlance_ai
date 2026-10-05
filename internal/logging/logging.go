@@ -12,7 +12,18 @@ import (
 // <dataDir>/logs/server.log. It returns the open log file so the caller can
 // close it, or nil if the file could not be opened (logging to stdout still works).
 func Setup(dataDir string) *os.File {
-	writers := []io.Writer{os.Stdout}
+	return setup(dataDir, os.Stdout)
+}
+
+// SetupStderr installs a JSON slog logger writing to stderr and the log file.
+// CLI commands that print results on stdout (user create, worker token) use
+// this so their output is not mixed with logs.
+func SetupStderr(dataDir string) *os.File {
+	return setup(dataDir, os.Stderr)
+}
+
+func setup(dataDir string, console io.Writer) *os.File {
+	writers := []io.Writer{console}
 
 	var f *os.File
 	logDir := filepath.Join(dataDir, "logs")

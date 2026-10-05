@@ -12,3 +12,6 @@ export const theme = {
 } as const;
 
 export type Theme = typeof theme;
+
+export { api } from "./api/client";
+export type { ApiClient, paths, components, operations } from "./api/client";
