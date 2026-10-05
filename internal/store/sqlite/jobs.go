@@ -127,6 +127,7 @@ func fromDBJob(j db.Job) store.Job {
 		CreatedAt:       fromMillis(j.CreatedAt),
 		UpdatedAt:       fromMillis(j.UpdatedAt),
 		FinishedAt:      fromNullMillis(j.FinishedAt),
+		StageStartedAt:  fromNullMillis(j.StageStartedAt),
 	}
 }
 

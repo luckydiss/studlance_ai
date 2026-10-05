@@ -17,6 +17,7 @@ import (
 	"github.com/luckydiss/studlance_ai/internal/httpapi"
 	"github.com/luckydiss/studlance_ai/internal/live"
 	"github.com/luckydiss/studlance_ai/internal/logging"
+	"github.com/luckydiss/studlance_ai/internal/queue"
 	"github.com/luckydiss/studlance_ai/internal/store"
 	"github.com/luckydiss/studlance_ai/internal/web"
 )
@@ -66,9 +67,16 @@ func serve(ctx context.Context, cfg config.Server) error {
 
 	hub := live.New()
 	authSvc := auth.New(st, auth.Config{SessionTTL: cfg.SessionTTL, CookieSecure: cfg.CookieSecure})
-	api := httpapi.New(st, blobStore, authSvc, hub, cfg, slog.Default())
+	q := queue.New(st, st.DB(), blobStore, hub, nil, queue.Options{
+		StageTimeout: cfg.StageTimeout,
+		Logger:       slog.Default(),
+	})
+	api := httpapi.New(st, blobStore, authSvc, hub, q, cfg, slog.Default())
 	apiHandler := api.Handler()
 	staticHandler := web.Handler(demoDir)
+
+	// Background maintenance: stale leases and stage timeouts (03-lifecycle.md).
+	go q.RunSweep(ctx, time.Minute)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

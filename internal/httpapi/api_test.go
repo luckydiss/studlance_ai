@@ -19,6 +19,7 @@ import (
 	"github.com/luckydiss/studlance_ai/internal/config"
 	"github.com/luckydiss/studlance_ai/internal/httpapi"
 	"github.com/luckydiss/studlance_ai/internal/live"
+	"github.com/luckydiss/studlance_ai/internal/queue"
 	"github.com/luckydiss/studlance_ai/internal/store"
 	"github.com/luckydiss/studlance_ai/internal/store/sqlite"
 )
@@ -51,7 +52,8 @@ func newHarness(t *testing.T) *harness {
 	cfg.MaxUpload = 1 << 20
 	authSvc := auth.New(st, auth.Config{SessionTTL: time.Hour})
 	hub := live.New()
-	srv := httpapi.New(st, bs, authSvc, hub, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	q := queue.New(st, st.DB(), bs, hub, nil, queue.Options{})
+	srv := httpapi.New(st, bs, authSvc, hub, q, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return &harness{t: t, store: st, blobs: bs, auth: authSvc, handler: srv.Handler()}
 }
 

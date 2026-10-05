@@ -11,7 +11,7 @@ import (
 )
 
 const adminJobs = `-- name: AdminJobs :many
-SELECT id, user_id, title, prompt, status, stage, current_version, pending_revision, needs_attention, worker_id, lease_epoch, lease_expires_at, cancel_requested, attempt, question, state, error, created_at, updated_at, finished_at FROM jobs
+SELECT id, user_id, title, prompt, status, stage, current_version, pending_revision, needs_attention, worker_id, lease_epoch, lease_expires_at, cancel_requested, attempt, question, state, error, created_at, updated_at, finished_at, stage_started_at FROM jobs
 WHERE (?1 IS NULL OR status = ?1)
   AND (?2 = 0 OR needs_attention = 1)
   AND (?3 IS NULL OR title LIKE ?3 OR user_id IN (
@@ -55,6 +55,7 @@ func (q *Queries) AdminJobs(ctx context.Context, arg AdminJobsParams) ([]Job, er
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.FinishedAt,
+			&i.StageStartedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -403,7 +404,7 @@ INSERT INTO jobs (id, user_id, title, prompt, status, stage, current_version,
                   lease_expires_at, cancel_requested, attempt, question, state,
                   error, created_at, updated_at, finished_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING id, user_id, title, prompt, status, stage, current_version, pending_revision, needs_attention, worker_id, lease_epoch, lease_expires_at, cancel_requested, attempt, question, state, error, created_at, updated_at, finished_at
+RETURNING id, user_id, title, prompt, status, stage, current_version, pending_revision, needs_attention, worker_id, lease_epoch, lease_expires_at, cancel_requested, attempt, question, state, error, created_at, updated_at, finished_at, stage_started_at
 `
 
 type CreateJobParams struct {
@@ -474,6 +475,7 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+		&i.StageStartedAt,
 	)
 	return i, err
 }
@@ -1015,7 +1017,7 @@ func (q *Queries) FilesByJobKind(ctx context.Context, arg FilesByJobKindParams) 
 }
 
 const jobByID = `-- name: JobByID :one
-SELECT id, user_id, title, prompt, status, stage, current_version, pending_revision, needs_attention, worker_id, lease_epoch, lease_expires_at, cancel_requested, attempt, question, state, error, created_at, updated_at, finished_at FROM jobs WHERE id = ?
+SELECT id, user_id, title, prompt, status, stage, current_version, pending_revision, needs_attention, worker_id, lease_epoch, lease_expires_at, cancel_requested, attempt, question, state, error, created_at, updated_at, finished_at, stage_started_at FROM jobs WHERE id = ?
 `
 
 func (q *Queries) JobByID(ctx context.Context, id string) (Job, error) {
@@ -1042,12 +1044,13 @@ func (q *Queries) JobByID(ctx context.Context, id string) (Job, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+		&i.StageStartedAt,
 	)
 	return i, err
 }
 
 const jobByIDForUser = `-- name: JobByIDForUser :one
-SELECT id, user_id, title, prompt, status, stage, current_version, pending_revision, needs_attention, worker_id, lease_epoch, lease_expires_at, cancel_requested, attempt, question, state, error, created_at, updated_at, finished_at FROM jobs WHERE id = ? AND user_id = ?
+SELECT id, user_id, title, prompt, status, stage, current_version, pending_revision, needs_attention, worker_id, lease_epoch, lease_expires_at, cancel_requested, attempt, question, state, error, created_at, updated_at, finished_at, stage_started_at FROM jobs WHERE id = ? AND user_id = ?
 `
 
 type JobByIDForUserParams struct {
@@ -1079,12 +1082,13 @@ func (q *Queries) JobByIDForUser(ctx context.Context, arg JobByIDForUserParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+		&i.StageStartedAt,
 	)
 	return i, err
 }
 
 const jobsByUser = `-- name: JobsByUser :many
-SELECT id, user_id, title, prompt, status, stage, current_version, pending_revision, needs_attention, worker_id, lease_epoch, lease_expires_at, cancel_requested, attempt, question, state, error, created_at, updated_at, finished_at FROM jobs WHERE user_id = ? ORDER BY created_at DESC
+SELECT id, user_id, title, prompt, status, stage, current_version, pending_revision, needs_attention, worker_id, lease_epoch, lease_expires_at, cancel_requested, attempt, question, state, error, created_at, updated_at, finished_at, stage_started_at FROM jobs WHERE user_id = ? ORDER BY created_at DESC
 `
 
 func (q *Queries) JobsByUser(ctx context.Context, userID string) ([]Job, error) {
@@ -1117,6 +1121,7 @@ func (q *Queries) JobsByUser(ctx context.Context, userID string) ([]Job, error) 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.FinishedAt,
+			&i.StageStartedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1132,7 +1137,7 @@ func (q *Queries) JobsByUser(ctx context.Context, userID string) ([]Job, error) 
 }
 
 const jobsByWorker = `-- name: JobsByWorker :many
-SELECT id, user_id, title, prompt, status, stage, current_version, pending_revision, needs_attention, worker_id, lease_epoch, lease_expires_at, cancel_requested, attempt, question, state, error, created_at, updated_at, finished_at FROM jobs WHERE worker_id = ? AND status = 'running'
+SELECT id, user_id, title, prompt, status, stage, current_version, pending_revision, needs_attention, worker_id, lease_epoch, lease_expires_at, cancel_requested, attempt, question, state, error, created_at, updated_at, finished_at, stage_started_at FROM jobs WHERE worker_id = ? AND status = 'running'
 `
 
 func (q *Queries) JobsByWorker(ctx context.Context, workerID sql.NullString) ([]Job, error) {
@@ -1165,6 +1170,7 @@ func (q *Queries) JobsByWorker(ctx context.Context, workerID sql.NullString) ([]
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.FinishedAt,
+			&i.StageStartedAt,
 		); err != nil {
 			return nil, err
 		}

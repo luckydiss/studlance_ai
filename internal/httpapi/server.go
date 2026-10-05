@@ -12,6 +12,7 @@ import (
 	"github.com/luckydiss/studlance_ai/internal/config"
 	"github.com/luckydiss/studlance_ai/internal/jobs"
 	"github.com/luckydiss/studlance_ai/internal/live"
+	"github.com/luckydiss/studlance_ai/internal/queue"
 	"github.com/luckydiss/studlance_ai/internal/store"
 )
 
@@ -21,14 +22,15 @@ type Server struct {
 	blobs  blobs.Blobs
 	auth   *auth.Service
 	hub    *live.Hub
+	queue  *queue.Queue
 	cfg    config.Server
 	logger *slog.Logger
 	now    func() time.Time
 }
 
 // New creates the API server.
-func New(st store.Store, b blobs.Blobs, a *auth.Service, hub *live.Hub, cfg config.Server, logger *slog.Logger) *Server {
-	return &Server{store: st, blobs: b, auth: a, hub: hub, cfg: cfg, logger: logger, now: func() time.Time { return time.Now().UTC() }}
+func New(st store.Store, b blobs.Blobs, a *auth.Service, hub *live.Hub, q *queue.Queue, cfg config.Server, logger *slog.Logger) *Server {
+	return &Server{store: st, blobs: b, auth: a, hub: hub, queue: q, cfg: cfg, logger: logger, now: func() time.Time { return time.Now().UTC() }}
 }
 
 // requestKey stores the raw *http.Request during a strict handler call.

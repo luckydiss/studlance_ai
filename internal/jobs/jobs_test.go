@@ -1,7 +1,9 @@
 package jobs
 
 import (
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/luckydiss/studlance_ai/internal/store"
 )
@@ -46,40 +48,70 @@ func TestTitleFromPrompt(t *testing.T) {
 	}
 }
 
-// TestStatusStepStates verifies the done/active/pending ordering and that
-// "Делаем работу" is done while verify runs.
+func stepStates(steps []StatusStep) []string {
+	out := make([]string, 0, len(steps))
+	for _, s := range steps {
+		out = append(out, s.State)
+	}
+	return out
+}
+
+// TestStatusStepStates verifies the done/active/pending ordering: the last
+// started step is active, everything before it done, everything after pending.
 func TestStatusStepStates(t *testing.T) {
-	state := func(steps []StatusStep) []string {
-		out := make([]string, 0, len(steps))
-		for _, s := range steps {
-			out = append(out, s.State)
-		}
-		return out
-	}
-	eq := func(a, b []string) bool {
-		if len(a) != len(b) {
-			return false
-		}
-		for i := range a {
-			if a[i] != b[i] {
-				return false
-			}
-		}
-		return true
+	now := time.Now()
+	draftStarted := func(d time.Duration) *time.Time {
+		ts := now.Add(-d)
+		return &ts
 	}
 
-	verify := store.Job{Status: store.StatusRunning, Stage: store.StageVerify}
-	if got := state(StatusSteps(verify)); !eq(got, []string{StepDone, StepDone, StepDone, StepActive, StepPending}) {
-		t.Fatalf("verify stages %v", got)
+	cases := []struct {
+		name string
+		job  store.Job
+		p    Progress
+		want []string
+	}{
+		{
+			name: "queued draft, no progress",
+			job:  store.Job{Status: store.StatusQueued, Stage: store.StageDraft},
+			p:    Progress{Now: now},
+			want: []string{StepActive, StepPending, StepPending, StepPending, StepPending},
+		},
+		{
+			name: "draft started 30s ago",
+			job:  store.Job{Status: store.StatusRunning, Stage: store.StageDraft},
+			p:    Progress{Now: now, DraftStartedAt: draftStarted(30 * time.Second)},
+			want: []string{StepDone, StepActive, StepPending, StepPending, StepPending},
+		},
+		{
+			name: "codex draft traced",
+			job:  store.Job{Status: store.StatusRunning, Stage: store.StageDraft},
+			p:    Progress{Now: now, CodexDraftTraced: true},
+			want: []string{StepDone, StepDone, StepActive, StepPending, StepPending},
+		},
+		{
+			name: "draft running for 2m",
+			job:  store.Job{Status: store.StatusRunning, Stage: store.StageDraft},
+			p:    Progress{Now: now, DraftStartedAt: draftStarted(2 * time.Minute)},
+			want: []string{StepDone, StepDone, StepActive, StepPending, StepPending},
+		},
+		{
+			name: "verify running",
+			job:  store.Job{Status: store.StatusRunning, Stage: store.StageVerify},
+			p:    Progress{Now: now},
+			want: []string{StepDone, StepDone, StepDone, StepActive, StepPending},
+		},
+		{
+			name: "done v1",
+			job:  store.Job{Status: store.StatusDone, CurrentVersion: 1},
+			p:    Progress{Now: now},
+			want: []string{StepDone, StepDone, StepDone, StepDone, StepDone},
+		},
 	}
-
-	queued := store.Job{Status: store.StatusQueued, Stage: store.StageDraft}
-	if got := state(StatusSteps(queued)); !eq(got, []string{StepDone, StepDone, StepActive, StepPending, StepPending}) {
-		t.Fatalf("queued stages %v", got)
-	}
-
-	done := store.Job{Status: store.StatusDone, CurrentVersion: 1}
-	if got := state(StatusSteps(done)); !eq(got, []string{StepDone, StepDone, StepDone, StepDone, StepDone}) {
-		t.Fatalf("done stages %v", got)
+	for _, c := range cases {
+		got := stepStates(StatusSteps(c.job, c.p))
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
 	}
 }

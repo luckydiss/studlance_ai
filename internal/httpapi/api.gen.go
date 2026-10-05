@@ -810,6 +810,18 @@ type ServerInterface interface {
 	// Отменить заказ
 	// (POST /api/admin/jobs/{id}/cancel)
 	AdminCancelJob(w http.ResponseWriter, r *http.Request, id JobId)
+	// Страницы документа черновика
+	// (GET /api/admin/jobs/{id}/draft/documents/{document_id}/pages)
+	AdminListDraftPages(w http.ResponseWriter, r *http.Request, id JobId, documentId DocumentId)
+	// Скачать файл черновика
+	// (GET /api/admin/jobs/{id}/draft/files/{path})
+	AdminGetDraftFile(w http.ResponseWriter, r *http.Request, id JobId, path string)
+	// Картинка страницы черновика
+	// (GET /api/admin/jobs/{id}/draft/pages/{document_id}/{page})
+	AdminGetDraftPage(w http.ResponseWriter, r *http.Request, id JobId, documentId DocumentId, page PageNumber)
+	// Мини-копия страницы черновика
+	// (GET /api/admin/jobs/{id}/draft/thumbs/{document_id}/{page})
+	AdminGetDraftThumb(w http.ResponseWriter, r *http.Request, id JobId, documentId DocumentId, page PageNumber)
 	// Добавить заметку
 	// (POST /api/admin/jobs/{id}/notes)
 	AdminCreateNote(w http.ResponseWriter, r *http.Request, id JobId)
@@ -822,9 +834,24 @@ type ServerInterface interface {
 	// Шаги запуска агента
 	// (GET /api/admin/jobs/{id}/runs/{run_id}/steps)
 	AdminGetRunSteps(w http.ResponseWriter, r *http.Request, id JobId, runId string, params AdminGetRunStepsParams)
-	// SSE-поток заказа для пульта
+	// SSE-поток заказа (события и шаги трейса)
 	// (GET /api/admin/jobs/{id}/stream)
 	AdminJobStream(w http.ResponseWriter, r *http.Request, id JobId)
+	// Архив комплекта версии
+	// (GET /api/admin/jobs/{id}/versions/{v}/bundle.zip)
+	AdminGetVersionBundle(w http.ResponseWriter, r *http.Request, id JobId, v VersionPath)
+	// Страницы документа версии (включая незавершённую)
+	// (GET /api/admin/jobs/{id}/versions/{v}/documents/{document_id}/pages)
+	AdminListVersionPages(w http.ResponseWriter, r *http.Request, id JobId, v VersionPath, documentId DocumentId)
+	// Скачать файл комплекта (без проверки владельца)
+	// (GET /api/admin/jobs/{id}/versions/{v}/files/{path})
+	AdminGetVersionFile(w http.ResponseWriter, r *http.Request, id JobId, v VersionPath, path string)
+	// Картинка страницы версии
+	// (GET /api/admin/jobs/{id}/versions/{v}/pages/{document_id}/{page})
+	AdminGetVersionPage(w http.ResponseWriter, r *http.Request, id JobId, v VersionPath, documentId DocumentId, page PageNumber)
+	// Мини-копия страницы версии
+	// (GET /api/admin/jobs/{id}/versions/{v}/thumbs/{document_id}/{page})
+	AdminGetVersionThumb(w http.ResponseWriter, r *http.Request, id JobId, v VersionPath, documentId DocumentId, page PageNumber)
 	// Список воркеров
 	// (GET /api/admin/workers)
 	AdminListWorkers(w http.ResponseWriter, r *http.Request)
@@ -1101,6 +1128,160 @@ func (siw *ServerInterfaceWrapper) AdminCancelJob(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// AdminListDraftPages operation middleware
+func (siw *ServerInterfaceWrapper) AdminListDraftPages(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id JobId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "document_id" -------------
+	var documentId DocumentId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "document_id", r.PathValue("document_id"), &documentId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "document_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminListDraftPages(w, r, id, documentId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdminGetDraftFile operation middleware
+func (siw *ServerInterfaceWrapper) AdminGetDraftFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id JobId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "path" -------------
+	var path string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "path", r.PathValue("path"), &path, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminGetDraftFile(w, r, id, path)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdminGetDraftPage operation middleware
+func (siw *ServerInterfaceWrapper) AdminGetDraftPage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id JobId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "document_id" -------------
+	var documentId DocumentId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "document_id", r.PathValue("document_id"), &documentId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "document_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "page" -------------
+	var page PageNumber
+
+	err = runtime.BindStyledParameterWithOptions("simple", "page", r.PathValue("page"), &page, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminGetDraftPage(w, r, id, documentId, page)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdminGetDraftThumb operation middleware
+func (siw *ServerInterfaceWrapper) AdminGetDraftThumb(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id JobId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "document_id" -------------
+	var documentId DocumentId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "document_id", r.PathValue("document_id"), &documentId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "document_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "page" -------------
+	var page PageNumber
+
+	err = runtime.BindStyledParameterWithOptions("simple", "page", r.PathValue("page"), &page, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminGetDraftThumb(w, r, id, documentId, page)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // AdminCreateNote operation middleware
 func (siw *ServerInterfaceWrapper) AdminCreateNote(w http.ResponseWriter, r *http.Request) {
 
@@ -1246,6 +1427,230 @@ func (siw *ServerInterfaceWrapper) AdminJobStream(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.AdminJobStream(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdminGetVersionBundle operation middleware
+func (siw *ServerInterfaceWrapper) AdminGetVersionBundle(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id JobId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "v" -------------
+	var v VersionPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "v", r.PathValue("v"), &v, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "v", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminGetVersionBundle(w, r, id, v)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdminListVersionPages operation middleware
+func (siw *ServerInterfaceWrapper) AdminListVersionPages(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id JobId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "v" -------------
+	var v VersionPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "v", r.PathValue("v"), &v, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "v", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "document_id" -------------
+	var documentId DocumentId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "document_id", r.PathValue("document_id"), &documentId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "document_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminListVersionPages(w, r, id, v, documentId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdminGetVersionFile operation middleware
+func (siw *ServerInterfaceWrapper) AdminGetVersionFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id JobId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "v" -------------
+	var v VersionPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "v", r.PathValue("v"), &v, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "v", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "path" -------------
+	var path string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "path", r.PathValue("path"), &path, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminGetVersionFile(w, r, id, v, path)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdminGetVersionPage operation middleware
+func (siw *ServerInterfaceWrapper) AdminGetVersionPage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id JobId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "v" -------------
+	var v VersionPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "v", r.PathValue("v"), &v, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "v", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "document_id" -------------
+	var documentId DocumentId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "document_id", r.PathValue("document_id"), &documentId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "document_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "page" -------------
+	var page PageNumber
+
+	err = runtime.BindStyledParameterWithOptions("simple", "page", r.PathValue("page"), &page, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminGetVersionPage(w, r, id, v, documentId, page)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdminGetVersionThumb operation middleware
+func (siw *ServerInterfaceWrapper) AdminGetVersionThumb(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "id" -------------
+	var id JobId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "v" -------------
+	var v VersionPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "v", r.PathValue("v"), &v, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "v", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "document_id" -------------
+	var documentId DocumentId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "document_id", r.PathValue("document_id"), &documentId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "document_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "page" -------------
+	var page PageNumber
+
+	err = runtime.BindStyledParameterWithOptions("simple", "page", r.PathValue("page"), &page, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdminGetVersionThumb(w, r, id, v, documentId, page)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2595,11 +3000,20 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc("POST "+options.BaseURL+"/api/admin/jobs/{id}/answer", wrapper.AdminAnswerJob)
 	m.HandleFunc("POST "+options.BaseURL+"/api/admin/jobs/{id}/attention", wrapper.AdminSetAttention)
 	m.HandleFunc("POST "+options.BaseURL+"/api/admin/jobs/{id}/cancel", wrapper.AdminCancelJob)
+	m.HandleFunc("GET "+options.BaseURL+"/api/admin/jobs/{id}/draft/documents/{document_id}/pages", wrapper.AdminListDraftPages)
+	m.HandleFunc("GET "+options.BaseURL+"/api/admin/jobs/{id}/draft/files/{path}", wrapper.AdminGetDraftFile)
+	m.HandleFunc("GET "+options.BaseURL+"/api/admin/jobs/{id}/draft/pages/{document_id}/{page}", wrapper.AdminGetDraftPage)
+	m.HandleFunc("GET "+options.BaseURL+"/api/admin/jobs/{id}/draft/thumbs/{document_id}/{page}", wrapper.AdminGetDraftThumb)
 	m.HandleFunc("POST "+options.BaseURL+"/api/admin/jobs/{id}/notes", wrapper.AdminCreateNote)
 	m.HandleFunc("POST "+options.BaseURL+"/api/admin/jobs/{id}/retry", wrapper.AdminRetryJob)
 	m.HandleFunc("GET "+options.BaseURL+"/api/admin/jobs/{id}/runs/{run_id}/log", wrapper.AdminGetRunLog)
 	m.HandleFunc("GET "+options.BaseURL+"/api/admin/jobs/{id}/runs/{run_id}/steps", wrapper.AdminGetRunSteps)
 	m.HandleFunc("GET "+options.BaseURL+"/api/admin/jobs/{id}/stream", wrapper.AdminJobStream)
+	m.HandleFunc("GET "+options.BaseURL+"/api/admin/jobs/{id}/versions/{v}/bundle.zip", wrapper.AdminGetVersionBundle)
+	m.HandleFunc("GET "+options.BaseURL+"/api/admin/jobs/{id}/versions/{v}/documents/{document_id}/pages", wrapper.AdminListVersionPages)
+	m.HandleFunc("GET "+options.BaseURL+"/api/admin/jobs/{id}/versions/{v}/files/{path}", wrapper.AdminGetVersionFile)
+	m.HandleFunc("GET "+options.BaseURL+"/api/admin/jobs/{id}/versions/{v}/pages/{document_id}/{page}", wrapper.AdminGetVersionPage)
+	m.HandleFunc("GET "+options.BaseURL+"/api/admin/jobs/{id}/versions/{v}/thumbs/{document_id}/{page}", wrapper.AdminGetVersionThumb)
 	m.HandleFunc("GET "+options.BaseURL+"/api/admin/workers", wrapper.AdminListWorkers)
 	m.HandleFunc("POST "+options.BaseURL+"/api/auth/login", wrapper.Login)
 	m.HandleFunc("POST "+options.BaseURL+"/api/auth/logout", wrapper.Logout)
@@ -2939,6 +3353,218 @@ func (response AdminCancelJob409JSONResponse) VisitAdminCancelJobResponse(w http
 	return json.NewEncoder(w).Encode(response)
 }
 
+type AdminListDraftPagesRequestObject struct {
+	Id         JobId      `json:"id"`
+	DocumentId DocumentId `json:"document_id"`
+}
+
+type AdminListDraftPagesResponseObject interface {
+	VisitAdminListDraftPagesResponse(w http.ResponseWriter) error
+}
+
+type AdminListDraftPages200JSONResponse PageList
+
+func (response AdminListDraftPages200JSONResponse) VisitAdminListDraftPagesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminListDraftPages401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response AdminListDraftPages401JSONResponse) VisitAdminListDraftPagesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminListDraftPages403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response AdminListDraftPages403JSONResponse) VisitAdminListDraftPagesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminListDraftPages404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response AdminListDraftPages404JSONResponse) VisitAdminListDraftPagesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetDraftFileRequestObject struct {
+	Id   JobId  `json:"id"`
+	Path string `json:"path"`
+}
+
+type AdminGetDraftFileResponseObject interface {
+	VisitAdminGetDraftFileResponse(w http.ResponseWriter) error
+}
+
+type AdminGetDraftFile200ApplicationoctetStreamResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response AdminGetDraftFile200ApplicationoctetStreamResponse) VisitAdminGetDraftFileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/octet-stream")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type AdminGetDraftFile401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response AdminGetDraftFile401JSONResponse) VisitAdminGetDraftFileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetDraftFile403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response AdminGetDraftFile403JSONResponse) VisitAdminGetDraftFileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetDraftFile404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response AdminGetDraftFile404JSONResponse) VisitAdminGetDraftFileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetDraftPageRequestObject struct {
+	Id         JobId      `json:"id"`
+	DocumentId DocumentId `json:"document_id"`
+	Page       PageNumber `json:"page"`
+}
+
+type AdminGetDraftPageResponseObject interface {
+	VisitAdminGetDraftPageResponse(w http.ResponseWriter) error
+}
+
+type AdminGetDraftPage200ImagepngResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response AdminGetDraftPage200ImagepngResponse) VisitAdminGetDraftPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "image/png")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type AdminGetDraftPage401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response AdminGetDraftPage401JSONResponse) VisitAdminGetDraftPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetDraftPage403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response AdminGetDraftPage403JSONResponse) VisitAdminGetDraftPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetDraftPage404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response AdminGetDraftPage404JSONResponse) VisitAdminGetDraftPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetDraftThumbRequestObject struct {
+	Id         JobId      `json:"id"`
+	DocumentId DocumentId `json:"document_id"`
+	Page       PageNumber `json:"page"`
+}
+
+type AdminGetDraftThumbResponseObject interface {
+	VisitAdminGetDraftThumbResponse(w http.ResponseWriter) error
+}
+
+type AdminGetDraftThumb200ImagepngResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response AdminGetDraftThumb200ImagepngResponse) VisitAdminGetDraftThumbResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "image/png")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type AdminGetDraftThumb401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response AdminGetDraftThumb401JSONResponse) VisitAdminGetDraftThumbResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetDraftThumb403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response AdminGetDraftThumb403JSONResponse) VisitAdminGetDraftThumbResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetDraftThumb404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response AdminGetDraftThumb404JSONResponse) VisitAdminGetDraftThumbResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type AdminCreateNoteRequestObject struct {
 	Id   JobId `json:"id"`
 	Body *AdminCreateNoteJSONRequestBody
@@ -3195,6 +3821,277 @@ func (response AdminJobStream403JSONResponse) VisitAdminJobStreamResponse(w http
 type AdminJobStream404JSONResponse struct{ NotFoundJSONResponse }
 
 func (response AdminJobStream404JSONResponse) VisitAdminJobStreamResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetVersionBundleRequestObject struct {
+	Id JobId       `json:"id"`
+	V  VersionPath `json:"v"`
+}
+
+type AdminGetVersionBundleResponseObject interface {
+	VisitAdminGetVersionBundleResponse(w http.ResponseWriter) error
+}
+
+type AdminGetVersionBundle200ApplicationzipResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response AdminGetVersionBundle200ApplicationzipResponse) VisitAdminGetVersionBundleResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/zip")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type AdminGetVersionBundle401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response AdminGetVersionBundle401JSONResponse) VisitAdminGetVersionBundleResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetVersionBundle403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response AdminGetVersionBundle403JSONResponse) VisitAdminGetVersionBundleResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetVersionBundle404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response AdminGetVersionBundle404JSONResponse) VisitAdminGetVersionBundleResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminListVersionPagesRequestObject struct {
+	Id         JobId       `json:"id"`
+	V          VersionPath `json:"v"`
+	DocumentId DocumentId  `json:"document_id"`
+}
+
+type AdminListVersionPagesResponseObject interface {
+	VisitAdminListVersionPagesResponse(w http.ResponseWriter) error
+}
+
+type AdminListVersionPages200JSONResponse PageList
+
+func (response AdminListVersionPages200JSONResponse) VisitAdminListVersionPagesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminListVersionPages401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response AdminListVersionPages401JSONResponse) VisitAdminListVersionPagesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminListVersionPages403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response AdminListVersionPages403JSONResponse) VisitAdminListVersionPagesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminListVersionPages404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response AdminListVersionPages404JSONResponse) VisitAdminListVersionPagesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetVersionFileRequestObject struct {
+	Id   JobId       `json:"id"`
+	V    VersionPath `json:"v"`
+	Path string      `json:"path"`
+}
+
+type AdminGetVersionFileResponseObject interface {
+	VisitAdminGetVersionFileResponse(w http.ResponseWriter) error
+}
+
+type AdminGetVersionFile200ApplicationoctetStreamResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response AdminGetVersionFile200ApplicationoctetStreamResponse) VisitAdminGetVersionFileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/octet-stream")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type AdminGetVersionFile401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response AdminGetVersionFile401JSONResponse) VisitAdminGetVersionFileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetVersionFile403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response AdminGetVersionFile403JSONResponse) VisitAdminGetVersionFileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetVersionFile404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response AdminGetVersionFile404JSONResponse) VisitAdminGetVersionFileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetVersionPageRequestObject struct {
+	Id         JobId       `json:"id"`
+	V          VersionPath `json:"v"`
+	DocumentId DocumentId  `json:"document_id"`
+	Page       PageNumber  `json:"page"`
+}
+
+type AdminGetVersionPageResponseObject interface {
+	VisitAdminGetVersionPageResponse(w http.ResponseWriter) error
+}
+
+type AdminGetVersionPage200ImagepngResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response AdminGetVersionPage200ImagepngResponse) VisitAdminGetVersionPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "image/png")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type AdminGetVersionPage401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response AdminGetVersionPage401JSONResponse) VisitAdminGetVersionPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetVersionPage403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response AdminGetVersionPage403JSONResponse) VisitAdminGetVersionPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetVersionPage404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response AdminGetVersionPage404JSONResponse) VisitAdminGetVersionPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetVersionThumbRequestObject struct {
+	Id         JobId       `json:"id"`
+	V          VersionPath `json:"v"`
+	DocumentId DocumentId  `json:"document_id"`
+	Page       PageNumber  `json:"page"`
+}
+
+type AdminGetVersionThumbResponseObject interface {
+	VisitAdminGetVersionThumbResponse(w http.ResponseWriter) error
+}
+
+type AdminGetVersionThumb200ImagepngResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response AdminGetVersionThumb200ImagepngResponse) VisitAdminGetVersionThumbResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "image/png")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type AdminGetVersionThumb401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response AdminGetVersionThumb401JSONResponse) VisitAdminGetVersionThumbResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetVersionThumb403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response AdminGetVersionThumb403JSONResponse) VisitAdminGetVersionThumbResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AdminGetVersionThumb404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response AdminGetVersionThumb404JSONResponse) VisitAdminGetVersionThumbResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
 
@@ -4038,11 +4935,29 @@ func (response WorkerFinish204Response) VisitWorkerFinishResponse(w http.Respons
 	return nil
 }
 
+type WorkerFinish400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerFinish400JSONResponse) VisitWorkerFinishResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerFinish401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerFinish401JSONResponse) VisitWorkerFinishResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerFinish404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerFinish404JSONResponse) VisitWorkerFinishResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4074,11 +4989,29 @@ func (response WorkerHeartbeat200JSONResponse) VisitWorkerHeartbeatResponse(w ht
 	return json.NewEncoder(w).Encode(response)
 }
 
+type WorkerHeartbeat400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerHeartbeat400JSONResponse) VisitWorkerHeartbeatResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerHeartbeat401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerHeartbeat401JSONResponse) VisitWorkerHeartbeatResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerHeartbeat404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerHeartbeat404JSONResponse) VisitWorkerHeartbeatResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4110,11 +5043,29 @@ func (response WorkerListInput200JSONResponse) VisitWorkerListInputResponse(w ht
 	return json.NewEncoder(w).Encode(response)
 }
 
+type WorkerListInput400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerListInput400JSONResponse) VisitWorkerListInputResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerListInput401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerListInput401JSONResponse) VisitWorkerListInputResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerListInput404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerListInput404JSONResponse) VisitWorkerListInputResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4148,11 +5099,29 @@ func (response WorkerPutRevisionRemark204Response) VisitWorkerPutRevisionRemarkR
 	return nil
 }
 
+type WorkerPutRevisionRemark400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerPutRevisionRemark400JSONResponse) VisitWorkerPutRevisionRemarkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerPutRevisionRemark401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerPutRevisionRemark401JSONResponse) VisitWorkerPutRevisionRemarkResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerPutRevisionRemark404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerPutRevisionRemark404JSONResponse) VisitWorkerPutRevisionRemarkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4195,11 +5164,29 @@ func (response WorkerGetInput200ApplicationoctetStreamResponse) VisitWorkerGetIn
 	return err
 }
 
+type WorkerGetInput400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerGetInput400JSONResponse) VisitWorkerGetInputResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerGetInput401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerGetInput401JSONResponse) VisitWorkerGetInputResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerGetInput404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerGetInput404JSONResponse) VisitWorkerGetInputResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4230,11 +5217,29 @@ func (response WorkerQuestion204Response) VisitWorkerQuestionResponse(w http.Res
 	return nil
 }
 
+type WorkerQuestion400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerQuestion400JSONResponse) VisitWorkerQuestionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerQuestion401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerQuestion401JSONResponse) VisitWorkerQuestionResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerQuestion404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerQuestion404JSONResponse) VisitWorkerQuestionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4266,11 +5271,29 @@ func (response WorkerCreateRun201JSONResponse) VisitWorkerCreateRunResponse(w ht
 	return json.NewEncoder(w).Encode(response)
 }
 
+type WorkerCreateRun400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerCreateRun400JSONResponse) VisitWorkerCreateRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerCreateRun401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerCreateRun401JSONResponse) VisitWorkerCreateRunResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerCreateRun404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerCreateRun404JSONResponse) VisitWorkerCreateRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4302,11 +5325,29 @@ func (response WorkerPatchRun204Response) VisitWorkerPatchRunResponse(w http.Res
 	return nil
 }
 
+type WorkerPatchRun400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerPatchRun400JSONResponse) VisitWorkerPatchRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerPatchRun401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerPatchRun401JSONResponse) VisitWorkerPatchRunResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerPatchRun404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerPatchRun404JSONResponse) VisitWorkerPatchRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4339,11 +5380,29 @@ func (response WorkerPutRunLog204Response) VisitWorkerPutRunLogResponse(w http.R
 	return nil
 }
 
+type WorkerPutRunLog400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerPutRunLog400JSONResponse) VisitWorkerPutRunLogResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerPutRunLog401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerPutRunLog401JSONResponse) VisitWorkerPutRunLogResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerPutRunLog404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerPutRunLog404JSONResponse) VisitWorkerPutRunLogResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4375,11 +5434,29 @@ func (response WorkerAppendSteps204Response) VisitWorkerAppendStepsResponse(w ht
 	return nil
 }
 
+type WorkerAppendSteps400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerAppendSteps400JSONResponse) VisitWorkerAppendStepsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerAppendSteps401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerAppendSteps401JSONResponse) VisitWorkerAppendStepsResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerAppendSteps404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerAppendSteps404JSONResponse) VisitWorkerAppendStepsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4411,11 +5488,29 @@ func (response WorkerCommitSnapshot204Response) VisitWorkerCommitSnapshotRespons
 	return nil
 }
 
+type WorkerCommitSnapshot400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerCommitSnapshot400JSONResponse) VisitWorkerCommitSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerCommitSnapshot401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerCommitSnapshot401JSONResponse) VisitWorkerCommitSnapshotResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerCommitSnapshot404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerCommitSnapshot404JSONResponse) VisitWorkerCommitSnapshotResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4448,11 +5543,29 @@ func (response WorkerPutSnapshotFile204Response) VisitWorkerPutSnapshotFileRespo
 	return nil
 }
 
+type WorkerPutSnapshotFile400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerPutSnapshotFile400JSONResponse) VisitWorkerPutSnapshotFileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerPutSnapshotFile401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerPutSnapshotFile401JSONResponse) VisitWorkerPutSnapshotFileResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerPutSnapshotFile404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerPutSnapshotFile404JSONResponse) VisitWorkerPutSnapshotFileResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4487,11 +5600,29 @@ func (response WorkerPutSnapshotPage204Response) VisitWorkerPutSnapshotPageRespo
 	return nil
 }
 
+type WorkerPutSnapshotPage400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerPutSnapshotPage400JSONResponse) VisitWorkerPutSnapshotPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerPutSnapshotPage401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerPutSnapshotPage401JSONResponse) VisitWorkerPutSnapshotPageResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerPutSnapshotPage404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerPutSnapshotPage404JSONResponse) VisitWorkerPutSnapshotPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4526,11 +5657,29 @@ func (response WorkerPutSnapshotThumb204Response) VisitWorkerPutSnapshotThumbRes
 	return nil
 }
 
+type WorkerPutSnapshotThumb400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerPutSnapshotThumb400JSONResponse) VisitWorkerPutSnapshotThumbResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerPutSnapshotThumb401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerPutSnapshotThumb401JSONResponse) VisitWorkerPutSnapshotThumbResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerPutSnapshotThumb404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerPutSnapshotThumb404JSONResponse) VisitWorkerPutSnapshotThumbResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4561,11 +5710,29 @@ func (response WorkerSetState204Response) VisitWorkerSetStateResponse(w http.Res
 	return nil
 }
 
+type WorkerSetState400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response WorkerSetState400JSONResponse) VisitWorkerSetStateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type WorkerSetState401JSONResponse struct{ UnauthorizedJSONResponse }
 
 func (response WorkerSetState401JSONResponse) VisitWorkerSetStateResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WorkerSetState404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response WorkerSetState404JSONResponse) VisitWorkerSetStateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4625,6 +5792,18 @@ type StrictServerInterface interface {
 	// Отменить заказ
 	// (POST /api/admin/jobs/{id}/cancel)
 	AdminCancelJob(ctx context.Context, request AdminCancelJobRequestObject) (AdminCancelJobResponseObject, error)
+	// Страницы документа черновика
+	// (GET /api/admin/jobs/{id}/draft/documents/{document_id}/pages)
+	AdminListDraftPages(ctx context.Context, request AdminListDraftPagesRequestObject) (AdminListDraftPagesResponseObject, error)
+	// Скачать файл черновика
+	// (GET /api/admin/jobs/{id}/draft/files/{path})
+	AdminGetDraftFile(ctx context.Context, request AdminGetDraftFileRequestObject) (AdminGetDraftFileResponseObject, error)
+	// Картинка страницы черновика
+	// (GET /api/admin/jobs/{id}/draft/pages/{document_id}/{page})
+	AdminGetDraftPage(ctx context.Context, request AdminGetDraftPageRequestObject) (AdminGetDraftPageResponseObject, error)
+	// Мини-копия страницы черновика
+	// (GET /api/admin/jobs/{id}/draft/thumbs/{document_id}/{page})
+	AdminGetDraftThumb(ctx context.Context, request AdminGetDraftThumbRequestObject) (AdminGetDraftThumbResponseObject, error)
 	// Добавить заметку
 	// (POST /api/admin/jobs/{id}/notes)
 	AdminCreateNote(ctx context.Context, request AdminCreateNoteRequestObject) (AdminCreateNoteResponseObject, error)
@@ -4637,9 +5816,24 @@ type StrictServerInterface interface {
 	// Шаги запуска агента
 	// (GET /api/admin/jobs/{id}/runs/{run_id}/steps)
 	AdminGetRunSteps(ctx context.Context, request AdminGetRunStepsRequestObject) (AdminGetRunStepsResponseObject, error)
-	// SSE-поток заказа для пульта
+	// SSE-поток заказа (события и шаги трейса)
 	// (GET /api/admin/jobs/{id}/stream)
 	AdminJobStream(ctx context.Context, request AdminJobStreamRequestObject) (AdminJobStreamResponseObject, error)
+	// Архив комплекта версии
+	// (GET /api/admin/jobs/{id}/versions/{v}/bundle.zip)
+	AdminGetVersionBundle(ctx context.Context, request AdminGetVersionBundleRequestObject) (AdminGetVersionBundleResponseObject, error)
+	// Страницы документа версии (включая незавершённую)
+	// (GET /api/admin/jobs/{id}/versions/{v}/documents/{document_id}/pages)
+	AdminListVersionPages(ctx context.Context, request AdminListVersionPagesRequestObject) (AdminListVersionPagesResponseObject, error)
+	// Скачать файл комплекта (без проверки владельца)
+	// (GET /api/admin/jobs/{id}/versions/{v}/files/{path})
+	AdminGetVersionFile(ctx context.Context, request AdminGetVersionFileRequestObject) (AdminGetVersionFileResponseObject, error)
+	// Картинка страницы версии
+	// (GET /api/admin/jobs/{id}/versions/{v}/pages/{document_id}/{page})
+	AdminGetVersionPage(ctx context.Context, request AdminGetVersionPageRequestObject) (AdminGetVersionPageResponseObject, error)
+	// Мини-копия страницы версии
+	// (GET /api/admin/jobs/{id}/versions/{v}/thumbs/{document_id}/{page})
+	AdminGetVersionThumb(ctx context.Context, request AdminGetVersionThumbRequestObject) (AdminGetVersionThumbResponseObject, error)
 	// Список воркеров
 	// (GET /api/admin/workers)
 	AdminListWorkers(ctx context.Context, request AdminListWorkersRequestObject) (AdminListWorkersResponseObject, error)
@@ -4947,6 +6141,116 @@ func (sh *strictHandler) AdminCancelJob(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
+// AdminListDraftPages operation middleware
+func (sh *strictHandler) AdminListDraftPages(w http.ResponseWriter, r *http.Request, id JobId, documentId DocumentId) {
+	var request AdminListDraftPagesRequestObject
+
+	request.Id = id
+	request.DocumentId = documentId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AdminListDraftPages(ctx, request.(AdminListDraftPagesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AdminListDraftPages")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AdminListDraftPagesResponseObject); ok {
+		if err := validResponse.VisitAdminListDraftPagesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// AdminGetDraftFile operation middleware
+func (sh *strictHandler) AdminGetDraftFile(w http.ResponseWriter, r *http.Request, id JobId, path string) {
+	var request AdminGetDraftFileRequestObject
+
+	request.Id = id
+	request.Path = path
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AdminGetDraftFile(ctx, request.(AdminGetDraftFileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AdminGetDraftFile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AdminGetDraftFileResponseObject); ok {
+		if err := validResponse.VisitAdminGetDraftFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// AdminGetDraftPage operation middleware
+func (sh *strictHandler) AdminGetDraftPage(w http.ResponseWriter, r *http.Request, id JobId, documentId DocumentId, page PageNumber) {
+	var request AdminGetDraftPageRequestObject
+
+	request.Id = id
+	request.DocumentId = documentId
+	request.Page = page
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AdminGetDraftPage(ctx, request.(AdminGetDraftPageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AdminGetDraftPage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AdminGetDraftPageResponseObject); ok {
+		if err := validResponse.VisitAdminGetDraftPageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// AdminGetDraftThumb operation middleware
+func (sh *strictHandler) AdminGetDraftThumb(w http.ResponseWriter, r *http.Request, id JobId, documentId DocumentId, page PageNumber) {
+	var request AdminGetDraftThumbRequestObject
+
+	request.Id = id
+	request.DocumentId = documentId
+	request.Page = page
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AdminGetDraftThumb(ctx, request.(AdminGetDraftThumbRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AdminGetDraftThumb")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AdminGetDraftThumbResponseObject); ok {
+		if err := validResponse.VisitAdminGetDraftThumbResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // AdminCreateNote operation middleware
 func (sh *strictHandler) AdminCreateNote(w http.ResponseWriter, r *http.Request, id JobId) {
 	var request AdminCreateNoteRequestObject
@@ -5080,6 +6384,147 @@ func (sh *strictHandler) AdminJobStream(w http.ResponseWriter, r *http.Request, 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(AdminJobStreamResponseObject); ok {
 		if err := validResponse.VisitAdminJobStreamResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// AdminGetVersionBundle operation middleware
+func (sh *strictHandler) AdminGetVersionBundle(w http.ResponseWriter, r *http.Request, id JobId, v VersionPath) {
+	var request AdminGetVersionBundleRequestObject
+
+	request.Id = id
+	request.V = v
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AdminGetVersionBundle(ctx, request.(AdminGetVersionBundleRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AdminGetVersionBundle")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AdminGetVersionBundleResponseObject); ok {
+		if err := validResponse.VisitAdminGetVersionBundleResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// AdminListVersionPages operation middleware
+func (sh *strictHandler) AdminListVersionPages(w http.ResponseWriter, r *http.Request, id JobId, v VersionPath, documentId DocumentId) {
+	var request AdminListVersionPagesRequestObject
+
+	request.Id = id
+	request.V = v
+	request.DocumentId = documentId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AdminListVersionPages(ctx, request.(AdminListVersionPagesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AdminListVersionPages")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AdminListVersionPagesResponseObject); ok {
+		if err := validResponse.VisitAdminListVersionPagesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// AdminGetVersionFile operation middleware
+func (sh *strictHandler) AdminGetVersionFile(w http.ResponseWriter, r *http.Request, id JobId, v VersionPath, path string) {
+	var request AdminGetVersionFileRequestObject
+
+	request.Id = id
+	request.V = v
+	request.Path = path
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AdminGetVersionFile(ctx, request.(AdminGetVersionFileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AdminGetVersionFile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AdminGetVersionFileResponseObject); ok {
+		if err := validResponse.VisitAdminGetVersionFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// AdminGetVersionPage operation middleware
+func (sh *strictHandler) AdminGetVersionPage(w http.ResponseWriter, r *http.Request, id JobId, v VersionPath, documentId DocumentId, page PageNumber) {
+	var request AdminGetVersionPageRequestObject
+
+	request.Id = id
+	request.V = v
+	request.DocumentId = documentId
+	request.Page = page
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AdminGetVersionPage(ctx, request.(AdminGetVersionPageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AdminGetVersionPage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AdminGetVersionPageResponseObject); ok {
+		if err := validResponse.VisitAdminGetVersionPageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// AdminGetVersionThumb operation middleware
+func (sh *strictHandler) AdminGetVersionThumb(w http.ResponseWriter, r *http.Request, id JobId, v VersionPath, documentId DocumentId, page PageNumber) {
+	var request AdminGetVersionThumbRequestObject
+
+	request.Id = id
+	request.V = v
+	request.DocumentId = documentId
+	request.Page = page
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AdminGetVersionThumb(ctx, request.(AdminGetVersionThumbRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AdminGetVersionThumb")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AdminGetVersionThumbResponseObject); ok {
+		if err := validResponse.VisitAdminGetVersionThumbResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -6147,102 +7592,108 @@ func (sh *strictHandler) WorkerRegister(w http.ResponseWriter, r *http.Request) 
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

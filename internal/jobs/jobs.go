@@ -4,6 +4,7 @@ package jobs
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/luckydiss/studlance_ai/internal/store"
 )
@@ -23,6 +24,9 @@ const (
 )
 
 // ClientStatusFor maps internal status/stage to the client-facing status.
+// An order re-queued after a failed attempt (attempt = 1) keeps its previous
+// client status ("Выполняем" / "Дорабатываем"), not "Заказ принят"
+// (03-lifecycle.md).
 func ClientStatusFor(j store.Job) ClientStatus {
 	switch j.Status {
 	case store.StatusUploading:
@@ -31,7 +35,7 @@ func ClientStatusFor(j store.Job) ClientStatus {
 		if j.Stage == store.StageRevise {
 			return ClientRevising
 		}
-		if j.CurrentVersion == 0 {
+		if j.CurrentVersion == 0 && j.Attempt == 0 {
 			return ClientAccepted
 		}
 		return ClientInProgress
@@ -90,37 +94,65 @@ type StatusStep struct {
 	State string
 }
 
+// Progress carries the worker-driven facts StatusSteps needs (PR 3): when the
+// draft stage started and whether codex already produced a trace step.
+type Progress struct {
+	Now              time.Time
+	DraftStartedAt   *time.Time
+	CodexDraftTraced bool
+}
+
 // StatusSteps builds the status window steps for a normal (non-revision) order.
-// Steps before the current one are "done", the current one is "active" and the
-// rest are "pending". The draft_started / first-trace heuristics from
-// 03-lifecycle.md need worker events (PR 3); here we derive progress from the
-// job stage so that during verify the "Делаем работу" step is already done.
-func StatusSteps(j store.Job) []StatusStep {
+// Each step has a start condition; the last started step is "active", every
+// step before it is "done" (a later started step implies the earlier ones
+// started too) and the rest are "pending". "Делаем работу" starts once the
+// first codex trace step of the draft stage arrives, or once the draft stage
+// runs for at least a minute (03-lifecycle.md).
+func StatusSteps(j store.Job, p Progress) []StatusStep {
 	if j.Stage == store.StageRevise || j.PendingRevision != nil {
 		return revisionSteps(j)
 	}
 
-	accepted := j.Status != store.StatusUploading
-	draftStarted := j.Stage != "" || j.CurrentVersion > 0 || j.Status == store.StatusDone ||
-		j.Status == store.StatusNeedsInput || j.Status == store.StatusFailed
-	// codex finished (work done) once verify started or a version exists.
-	workDone := j.CurrentVersion > 0 || j.Status == store.StatusDone ||
-		(j.Status == store.StatusRunning && j.Stage == store.StageVerify)
-	verifyStarted := j.CurrentVersion > 0 || j.Status == store.StatusDone
 	done := j.Status == store.StatusDone
+	titles := []string{
+		"Заказ принят",
+		"Разбираем задание и методичку",
+		"Делаем работу",
+		"Оформляем по требованиям методички",
+		"Готово",
+	}
+	started := []bool{
+		j.Status != store.StatusUploading,
+		p.DraftStartedAt != nil,
+		p.CodexDraftTraced || (p.DraftStartedAt != nil && !p.DraftStartedAt.After(p.Now.Add(-time.Minute))),
+		j.Stage == store.StageVerify || j.CurrentVersion > 0 || done,
+		done,
+	}
 
-	steps := []StatusStep{
-		step("Заказ принят", accepted),
-		step("Разбираем задание и методичку", draftStarted),
-		step("Делаем работу", workDone),
-		step("Оформляем по требованиям методички", verifyStarted),
+	steps := make([]StatusStep, len(titles))
+	for i, title := range titles {
+		steps[i] = StatusStep{Title: title, State: StepPending}
 	}
-	doneStep := step("Готово", done)
 	if done {
-		doneStep.Title = fmt.Sprintf("Готово — версия %d", j.CurrentVersion)
+		for i := range steps {
+			steps[i].State = StepDone
+		}
+		steps[len(steps)-1].Title = fmt.Sprintf("Готово — версия %d", j.CurrentVersion)
+		return steps
 	}
-	steps = append(steps, doneStep)
-	markCurrent(steps)
+
+	current := 0
+	for i, ok := range started {
+		if ok {
+			current = i
+		}
+	}
+	for i := range steps {
+		if i < current {
+			steps[i].State = StepDone
+		}
+	}
+	steps[current].State = StepActive
 	return steps
 }
 
@@ -137,23 +169,6 @@ func revisionSteps(j store.Job) []StatusStep {
 	}
 	steps = append(steps, last)
 	return steps
-}
-
-func step(title string, done bool) StatusStep {
-	if done {
-		return StatusStep{Title: title, State: StepDone}
-	}
-	return StatusStep{Title: title, State: StepPending}
-}
-
-// markCurrent marks the first pending step as active.
-func markCurrent(steps []StatusStep) {
-	for i := range steps {
-		if steps[i].State == StepPending {
-			steps[i].State = StepActive
-			return
-		}
-	}
 }
 
 // CanCancel reports whether the order may be canceled from its current status.
