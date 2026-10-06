@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -100,6 +101,11 @@ const stepOverheadBytes = 256
 // slice element, the interface header and the allocator rounding. It is
 // charged for keys and elements as well.
 const payloadEntryBytes = 64
+
+// payloadSlotBytes is the cost of one slot of a slice backing array. Every
+// slot of the array's capacity is charged, including unfilled ones: a null
+// element occupies 16 bytes of an []interface{} exactly like any other value.
+const payloadSlotBytes = 16
 
 // payloadScalarBytes is the cost of one non-string scalar payload value.
 const payloadScalarBytes = 24
@@ -437,11 +443,16 @@ func stepSize(s NewStep) int {
 	return stepOverheadBytes + len(s.Summary) + payloadSize(s.Payload)
 }
 
-// payloadSize estimates one payload value, charging every container entry and
-// every key. Unknown types get a conservative fixed cost.
+// payloadSize estimates one payload value. The container header, the value of
+// every entry and every slot of the backing array (charged for the whole
+// capacity, so unfilled slots and nulls are not free) are accounted
+// separately. Unknown container types are walked by reflection, so any JSON
+// shape a parser keeps in the payload is covered.
 func payloadSize(v interface{}) int {
 	switch t := v.(type) {
 	case nil:
+		// A nil interface holds nothing of its own; the slot that contains it
+		// is charged by the enclosing container.
 		return 0
 	case string:
 		return len(t) + payloadEntryBytes
@@ -449,7 +460,7 @@ func payloadSize(v interface{}) int {
 		if t == nil {
 			return 0
 		}
-		size := payloadEntryBytes
+		size := payloadEntryBytes + cap(t)*payloadSlotBytes
 		for _, e := range t {
 			size += len(e) + payloadEntryBytes
 		}
@@ -458,7 +469,7 @@ func payloadSize(v interface{}) int {
 		if t == nil {
 			return 0
 		}
-		size := payloadEntryBytes
+		size := payloadEntryBytes + cap(t)*payloadSlotBytes
 		for _, e := range t {
 			size += payloadSize(e)
 		}
@@ -467,7 +478,7 @@ func payloadSize(v interface{}) int {
 		if t == nil {
 			return 0
 		}
-		size := payloadEntryBytes
+		size := payloadEntryBytes + cap(t)*payloadSlotBytes
 		for _, e := range t {
 			size += payloadSize(e)
 		}
@@ -478,7 +489,39 @@ func payloadSize(v interface{}) int {
 		}
 		size := payloadEntryBytes
 		for k, e := range t {
-			size += len(k) + payloadEntryBytes + payloadSize(e)
+			// The extra slot covers the map bucket and its overflow.
+			size += len(k) + payloadEntryBytes + payloadSlotBytes + payloadSize(e)
+		}
+		return size
+	default:
+		return payloadContainerSize(v)
+	}
+}
+
+// payloadContainerSize estimates a payload value of a type the fast path does
+// not know: any other slice, array or map is walked by reflection (with the
+// same slot and entry accounting), everything else is a scalar.
+func payloadContainerSize(v interface{}) int {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Slice, reflect.Array:
+		if rv.Kind() == reflect.Slice && rv.IsNil() {
+			return 0
+		}
+		size := payloadEntryBytes + rv.Cap()*payloadSlotBytes
+		for i := 0; i < rv.Len(); i++ {
+			size += payloadSize(rv.Index(i).Interface())
+		}
+		return size
+	case reflect.Map:
+		if rv.IsNil() {
+			return 0
+		}
+		size := payloadEntryBytes
+		iter := rv.MapRange()
+		for iter.Next() {
+			size += len(fmt.Sprint(iter.Key().Interface())) + payloadEntryBytes + payloadSlotBytes
+			size += payloadSize(iter.Value().Interface())
 		}
 		return size
 	default:

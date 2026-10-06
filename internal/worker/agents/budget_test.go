@@ -103,13 +103,16 @@ func TestStepBudgetMixedPayloadInFlight(t *testing.T) {
 	if len(batch) != 5 {
 		t.Fatalf("queued = %d, want 5", len(batch))
 	}
-	wantBig := stepOverheadBytes + payloadEntryBytes + len("output") + payloadEntryBytes + 1024 + payloadEntryBytes
+	// The big step costs the fixed step overhead, the map header and the
+	// "output" entry (key, entry and its map slot), plus the 1024-byte string
+	// value with its header.
+	wantBig := stepOverheadBytes + payloadEntryBytes + len("output") + payloadEntryBytes + payloadSlotBytes + 1024 + payloadEntryBytes
 	if sizes[0] != wantBig {
 		t.Fatalf("big step size = %d, want %d", sizes[0], wantBig)
 	}
-	// In flight: 1478 + 4*256 = 2502 bytes of 4096.
-	q.push(small(6)) // 2758 fits
-	q.push(big)      // 4236 > cap: dropped
+	// In flight: 1494 + 4*256 = 2518 bytes of 4096.
+	q.push(small(6)) // 2774 fits
+	q.push(big)      // 4268 > cap: dropped
 	more, _, _ := q.take()
 	if len(more) != 1 || more[0].Seq != 6 {
 		t.Fatalf("in-flight budget not enforced: %+v", more)

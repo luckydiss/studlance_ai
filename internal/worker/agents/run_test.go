@@ -44,6 +44,9 @@ func heapAlloc() uint64 {
 //   - "manyevents": thread.started, HELPER_LINES (default 1,000,000) tiny
 //     agent_message items, HELPER_MARKER, then HELPER_TAIL_LINES small tail
 //     items, exit HELPER_EXIT.
+//   - "changes": thread.started, HELPER_LINES (default 60) file_change items
+//     whose changes array carries HELPER_NULLS (default 100000) nulls, then
+//     HELPER_MARKER and HELPER_TAIL_LINES tail items, exit HELPER_EXIT.
 //   - "parentexit": parent starts a grandchild that inherits stdout/stderr
 //     (HELPER_GRANDCHILD_SLEEP_MS, default 120 s), records its pid in
 //     HELPER_GRANDCHILD_PID_FILE, writes two agent_message items and exits
@@ -81,6 +84,30 @@ func TestHelperProcess(t *testing.T) {
 			_ = os.WriteFile(marker, []byte("done"), 0o644)
 		}
 		fmt.Println(`{"type":"item.completed","item":{"id":"m2","type":"agent_message","text":"parent last line"}}`)
+		os.Exit(exitCode)
+	}
+
+	if os.Getenv("HELPER_MODE") == "changes" {
+		n, _ := strconv.Atoi(os.Getenv("HELPER_LINES"))
+		if n <= 0 {
+			n = 60
+		}
+		nulls, _ := strconv.Atoi(os.Getenv("HELPER_NULLS"))
+		if nulls <= 0 {
+			nulls = 100000
+		}
+		tail, _ := strconv.Atoi(os.Getenv("HELPER_TAIL_LINES"))
+		fmt.Println(`{"type":"thread.started","thread_id":"helper-thread-changes"}`)
+		line := string(nestedChangesLine(nulls))
+		for i := 0; i < n; i++ {
+			fmt.Println(line)
+		}
+		if marker := os.Getenv("HELPER_MARKER"); marker != "" {
+			_ = os.WriteFile(marker, []byte("done"), 0o644)
+		}
+		for i := 1; i <= tail; i++ {
+			fmt.Printf(`{"type":"item.completed","item":{"id":"tail_%d","type":"agent_message","text":"after changes %d"}}`+"\n", i, i)
+		}
 		os.Exit(exitCode)
 	}
 
