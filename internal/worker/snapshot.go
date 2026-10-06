@@ -103,11 +103,15 @@ func (j *jobExec) commitVersion(ctx context.Context, n int, prevSnap string) boo
 
 // commitFailed maps a snapshot/commit error to a stage failure or an abort.
 func (j *jobExec) commitFailed(ctx context.Context, err error) bool {
-	if errors.Is(err, errCanceled) {
+	if j.stale.Load() {
+		// Lease lost: stop without any finish.
+		return false
+	}
+	if j.cancelRequested.Load() || errors.Is(err, errCanceled) {
 		// The order was canceled while the snapshot was being prepared or
-		// uploaded: the commit must not happen. Report canceled on the job
-		// context (the stage context is already canceled by the heartbeat).
-		if !j.stale.Load() && ctx.Err() == nil {
+		// uploaded: the commit must not happen. canceled is reported on the
+		// service context (the active one is already canceled).
+		if j.serviceCtx(ctx).Err() == nil {
 			j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
 		}
 		return false
@@ -116,7 +120,7 @@ func (j *jobExec) commitFailed(ctx context.Context, err error) bool {
 		j.log.Error("commit lost lease", "err", err)
 		return false
 	}
-	if ctx.Err() != nil {
+	if j.serviceCtx(ctx).Err() != nil {
 		return false
 	}
 	j.log.Error("snapshot failed", "err", err)
@@ -125,9 +129,12 @@ func (j *jobExec) commitFailed(ctx context.Context, err error) bool {
 }
 
 // snapshot builds, uploads and commits one snapshot (05-worker.md «Снимок версии»).
-// The cancellation flag is re-checked right before the commit: a cancel that
-// arrived during the uploads must never turn into a commit.
+// Every request of the snapshot runs on the active work context, and the
+// cancellation flag is re-checked right before the commit: a cancel that
+// arrived during the uploads must never turn into a commit, and the client's
+// internal retries stop as well.
 func (j *jobExec) snapshot(ctx context.Context, name, prevName, title string, ver *httpapi.Verification) error {
+	cctx := j.activeCtx(ctx)
 	if j.cancelRequested.Load() {
 		return errCanceled
 	}
@@ -164,7 +171,7 @@ func (j *jobExec) snapshot(ctx context.Context, name, prevName, title string, ve
 		if err != nil {
 			return err
 		}
-		return j.uploadFile(ctx, name, filepath.ToSlash(rel), p)
+		return j.uploadFile(cctx, name, filepath.ToSlash(rel), p)
 	})
 	if err != nil {
 		return err
@@ -179,7 +186,7 @@ func (j *jobExec) snapshot(ctx context.Context, name, prevName, title string, ve
 			if err != nil {
 				return err
 			}
-			return j.uploadFile(ctx, name, "preview/"+filepath.ToSlash(rel), p)
+			return j.uploadFile(cctx, name, "preview/"+filepath.ToSlash(rel), p)
 		})
 		if err != nil {
 			return err
@@ -191,7 +198,7 @@ func (j *jobExec) snapshot(ctx context.Context, name, prevName, title string, ve
 	info := snapshotInfo{}
 	docs := make([]httpapi.SnapshotDocument, 0, len(m.Documents))
 	for idx, d := range m.Documents {
-		doc, idoc, err := j.snapshotDoc(ctx, snapDir, name, prevName, prevInfo, idx, d)
+		doc, idoc, err := j.snapshotDoc(cctx, snapDir, name, prevName, prevInfo, idx, d)
 		if err != nil {
 			return err
 		}
@@ -213,7 +220,7 @@ func (j *jobExec) snapshot(ctx context.Context, name, prevName, title string, ve
 	if j.cancelRequested.Load() {
 		return errCanceled
 	}
-	return j.w.cl.CommitSnapshot(ctx, j.asn.JobId, name, req)
+	return j.w.cl.CommitSnapshot(cctx, j.asn.JobId, name, req)
 }
 
 // snapshotDoc renders and uploads one document's preview, pages and thumbs,

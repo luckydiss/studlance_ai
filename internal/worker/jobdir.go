@@ -126,10 +126,16 @@ func (j *jobExec) downloadInput(ctx context.Context, f httpapi.WorkerInputFile) 
 		}
 		_ = os.Remove(tmp.Name())
 		if !client.IsRetryable(err) || ctx.Err() != nil {
+			if j.cancelRequested.Load() {
+				return errCanceled
+			}
 			return fmt.Errorf("download %s: %w", f.Path, err)
 		}
 		j.log.Error("download failed, retrying", "path", f.Path, "err", err)
 		if !sleepCtx(ctx, backoff) {
+			if j.cancelRequested.Load() {
+				return errCanceled
+			}
 			return fmt.Errorf("download %s: %w", f.Path, err)
 		}
 		if backoff < 60*time.Second {

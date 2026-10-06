@@ -39,6 +39,11 @@ func (j *jobExec) putLoop(ctx context.Context, localPath string, put func(r io.R
 		err = put(f)
 		_ = f.Close()
 		if err == nil || !client.IsRetryable(err) || ctx.Err() != nil {
+			// A cancellation (or a lost lease) that killed this attempt must
+			// not be reported as a failure of the stage.
+			if stopOnCancel && j.cancelRequested.Load() {
+				return errCanceled
+			}
 			return err
 		}
 		if stopOnCancel && j.cancelRequested.Load() {
@@ -46,6 +51,9 @@ func (j *jobExec) putLoop(ctx context.Context, localPath string, put func(r io.R
 		}
 		j.log.Error("upload failed, retrying", "path", localPath, "err", err)
 		if !sleepCtx(ctx, backoff) {
+			if stopOnCancel && j.cancelRequested.Load() {
+				return errCanceled
+			}
 			return err
 		}
 		if stopOnCancel && j.cancelRequested.Load() {

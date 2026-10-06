@@ -46,9 +46,46 @@ type jobExec struct {
 	state       localState
 	agentCancel context.CancelFunc // cancels the agent's stage context
 
+	// jobCtx is the service context of the job: heartbeat, run patch,
+	// question and the terminal finish (including finish canceled, which must
+	// survive the cancellation that caused it).
+	jobCtx context.Context
+	// workCtx is the context of the job's active work: input downloads,
+	// snapshot and crop uploads, commit, create-run, steps and finish ok. It
+	// is canceled as soon as a cancellation is confirmed or the lease is
+	// lost, so no new HTTP attempt (including the client's internal retries
+	// after 5xx or a lost response) is started after that.
+	workCtx    context.Context
+	workCancel context.CancelFunc
+
 	cancelRequested atomic.Bool
 	stale           atomic.Bool
 	stageTimeout    atomic.Bool
+}
+
+// activeCtx returns the context of the job's active work. Falls back to ctx
+// for jobExec values built directly by tests.
+func (j *jobExec) activeCtx(ctx context.Context) context.Context {
+	if j.workCtx != nil {
+		return j.workCtx
+	}
+	return ctx
+}
+
+// serviceCtx returns the context of the job's service requests; it stays
+// usable after a cancellation so the canceled outcome can be reported.
+func (j *jobExec) serviceCtx(ctx context.Context) context.Context {
+	if j.jobCtx != nil {
+		return j.jobCtx
+	}
+	return ctx
+}
+
+// stopWork cancels the active work context; idempotent.
+func (j *jobExec) stopWork() {
+	if j.workCancel != nil {
+		j.workCancel()
+	}
 }
 
 // executeJob handles one assignment end to end: prepare, stages, after-stage.
@@ -63,7 +100,12 @@ func (w *Worker) executeJob(ctx context.Context, asn *httpapi.Assignment) {
 }
 
 func (j *jobExec) run(ctx context.Context) {
-	if err := j.prepare(ctx); err != nil {
+	j.jobCtx = ctx
+	workCtx, workCancel := context.WithCancel(ctx)
+	j.workCtx, j.workCancel = workCtx, workCancel
+	defer workCancel()
+
+	if err := j.prepare(j.activeCtx(ctx)); err != nil {
 		j.log.Error("prepare failed", "err", err)
 		if isStale(err) {
 			return
@@ -79,8 +121,8 @@ func (j *jobExec) run(ctx context.Context) {
 		return
 	}
 
-	// Server state + prompts version for the admin view.
-	if err := j.setState(ctx, map[string]interface{}{"prompts_version": prompts.PromptsVersion}); err != nil {
+	// Server state + prompts version for the admin view (service request).
+	if err := j.setState(j.serviceCtx(ctx), map[string]interface{}{"prompts_version": prompts.PromptsVersion}); err != nil {
 		if isStale(err) {
 			return
 		}
@@ -123,7 +165,7 @@ func (j *jobExec) run(ctx context.Context) {
 		}
 		switch j.stage {
 		case "draft":
-			if !j.commitDraft(ctx) {
+			if !j.commitDraft(j.activeCtx(ctx)) {
 				return
 			}
 			// Straight into verify on the same lease, without a new claim.
@@ -136,7 +178,7 @@ func (j *jobExec) run(ctx context.Context) {
 			j.log.Info("draft committed, starting verify")
 		case "verify":
 			v := 1
-			if !j.commitVersion(ctx, v, "draft") {
+			if !j.commitVersion(j.activeCtx(ctx), v, "draft") {
 				return // already finished (canceled or failed)
 			}
 			if j.cancelRequested.Load() {
@@ -148,7 +190,7 @@ func (j *jobExec) run(ctx context.Context) {
 		case "revise":
 			v := j.asn.Version
 			prev := fmt.Sprintf("v%d", v-1)
-			if !j.commitVersion(ctx, v, prev) {
+			if !j.commitVersion(j.activeCtx(ctx), v, prev) {
 				return // already finished (canceled or failed)
 			}
 			if j.cancelRequested.Load() {
@@ -175,9 +217,9 @@ func (j *jobExec) finishCanceledIfRequested(ctx context.Context) {
 	}
 }
 
-// finishOk reports success unless the order was canceled in the meantime (the
-// cancel flag always wins over a successful commit) or the lease was lost
-// (then there is nothing to report).
+// finishOk reports success on the active context: a cancellation that arrives
+// while the finish-ok request is in flight stops its internal retries, and the
+// order is reported canceled instead of ok. A lost lease reports nothing.
 func (j *jobExec) finishOk(ctx context.Context, version *int) {
 	if j.stale.Load() {
 		return
@@ -186,7 +228,14 @@ func (j *jobExec) finishOk(ctx context.Context, version *int) {
 		j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
 		return
 	}
-	j.finish(ctx, httpapi.FinishRequestOutcomeOk, version, "")
+	if err := j.sendFinish(j.activeCtx(ctx), httpapi.FinishRequestOutcomeOk, version, ""); err != nil {
+		j.log.Error("finish", "outcome", httpapi.FinishRequestOutcomeOk, "err", err)
+		if j.cancelRequested.Load() {
+			j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
+		}
+		return
+	}
+	j.log.Info("finished", "outcome", httpapi.FinishRequestOutcomeOk, "error", "")
 }
 
 // heartbeatLoop extends the lease and watches for cancellation and fencing.
@@ -206,10 +255,12 @@ func (j *jobExec) heartbeatLoop(ctx context.Context, done chan struct{}) {
 			if ctx.Err() != nil {
 				return
 			}
-			// Stale lease or "order not running": drop the job at once.
+			// Stale lease or "order not running": drop the job at once and
+			// stop every pending work request.
 			if isStale(err) || isConflict(err) {
 				j.log.Error("heartbeat lost the lease", "err", err)
 				j.stale.Store(true)
+				j.stopWork()
 				j.agentCancel()
 				return
 			}
@@ -219,6 +270,7 @@ func (j *jobExec) heartbeatLoop(ctx context.Context, done chan struct{}) {
 		if resp.Cancel {
 			j.log.Info("cancel requested")
 			j.cancelRequested.Store(true)
+			j.stopWork()
 			j.agentCancel()
 			return
 		}
@@ -226,16 +278,36 @@ func (j *jobExec) heartbeatLoop(ctx context.Context, done chan struct{}) {
 }
 
 // finish reports the terminal outcome; best-effort logs on top of it.
+//
+// The cancel flag always wins over ok/failed/timeout, and the context is
+// chosen by the outcome: canceled goes out on the service context (it must
+// survive the cancellation that caused it), everything else on the active
+// work context, so a cancellation stops their retries.
 func (j *jobExec) finish(ctx context.Context, outcome httpapi.FinishRequestOutcome, version *int, errText string) {
-	req := httpapi.FinishRequest{Epoch: j.asn.Epoch, Outcome: outcome, Version: version}
-	if errText != "" {
-		req.Error = &errText
+	if j.stale.Load() {
+		return
 	}
-	if err := j.w.cl.Finish(ctx, j.asn.JobId, req); err != nil {
+	if j.cancelRequested.Load() && outcome != httpapi.FinishRequestOutcomeCanceled {
+		outcome, version, errText = httpapi.FinishRequestOutcomeCanceled, nil, ""
+	}
+	cctx := j.activeCtx(ctx)
+	if outcome == httpapi.FinishRequestOutcomeCanceled {
+		cctx = j.serviceCtx(ctx)
+	}
+	if err := j.sendFinish(cctx, outcome, version, errText); err != nil {
 		j.log.Error("finish", "outcome", outcome, "err", err)
 		return
 	}
 	j.log.Info("finished", "outcome", outcome, "error", errText)
+}
+
+// sendFinish posts one finish request.
+func (j *jobExec) sendFinish(ctx context.Context, outcome httpapi.FinishRequestOutcome, version *int, errText string) error {
+	req := httpapi.FinishRequest{Epoch: j.asn.Epoch, Outcome: outcome, Version: version}
+	if errText != "" {
+		req.Error = &errText
+	}
+	return j.w.cl.Finish(ctx, j.asn.JobId, req)
 }
 
 func isConflict(err error) bool {

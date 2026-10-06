@@ -40,7 +40,7 @@ func (j *jobExec) runStage(ctx, agentCtx context.Context, stage, action string) 
 	// Revision prep runs on any revise-stage action (revise, but also a
 	// continue/answer after a crash mid-prep) and is idempotent.
 	if stage == "revise" {
-		if err := j.prepareRevision(ctx); err != nil {
+		if err := j.prepareRevision(j.activeCtx(ctx)); err != nil {
 			if isStale(err) {
 				return stageResult{outcome: outcomeAborted}
 			}
@@ -64,7 +64,7 @@ func (j *jobExec) runStage(ctx, agentCtx context.Context, stage, action string) 
 	if agent == "claude" && !resume {
 		session = id.NewV4()
 		j.setSession(agent, session)
-		if err := j.setState(ctx, map[string]interface{}{"claude_session_id": session}); err != nil {
+		if err := j.setState(j.serviceCtx(ctx), map[string]interface{}{"claude_session_id": session}); err != nil {
 			if isStale(err) {
 				return stageResult{outcome: outcomeAborted}
 			}
@@ -87,7 +87,7 @@ func (j *jobExec) runStage(ctx, agentCtx context.Context, stage, action string) 
 	if agent == "claude" && session != "" {
 		createReq.SessionId = &session
 	}
-	runID, err := j.w.cl.CreateRun(ctx, j.asn.JobId, createReq)
+	runID, err := j.w.cl.CreateRun(j.activeCtx(ctx), j.asn.JobId, createReq)
 	if err != nil {
 		if isStale(err) || isConflict(err) {
 			return stageResult{outcome: outcomeAborted}
@@ -209,9 +209,10 @@ func (j *jobExec) runAgent(jobCtx, runCtx context.Context, log *slog.Logger, run
 				}
 				batch = append(batch, ns)
 			}
-			if err := j.w.cl.AppendSteps(jobCtx, j.asn.JobId, runID, j.asn.Epoch, batch); err != nil {
+			if err := j.w.cl.AppendSteps(j.activeCtx(jobCtx), j.asn.JobId, runID, j.asn.Epoch, batch); err != nil {
 				if isStale(err) {
 					j.stale.Store(true)
+					j.stopWork()
 				}
 				return err
 			}
@@ -223,7 +224,7 @@ func (j *jobExec) runAgent(jobCtx, runCtx context.Context, log *slog.Logger, run
 			if agent == "claude" {
 				key = "claude_session_id"
 			}
-			if err := j.setState(jobCtx, map[string]interface{}{key: id}); err != nil {
+			if err := j.setState(j.serviceCtx(jobCtx), map[string]interface{}{key: id}); err != nil {
 				log.Error("post session id", "err", err)
 			}
 		},
@@ -232,15 +233,17 @@ func (j *jobExec) runAgent(jobCtx, runCtx context.Context, log *slog.Logger, run
 }
 
 // reportRun uploads the raw log and patches the run row with the outcome
-// fields known so far (tokens, cost, exit code).
+// fields known so far (tokens, cost, exit code). It is a service report: the
+// log upload is not work that a cancellation should silently drop.
 func (j *jobExec) reportRun(ctx context.Context, log *slog.Logger, runID string, res agents.Result, runErr error) {
 	if j.stale.Load() {
 		return
 	}
+	cctx := j.serviceCtx(ctx)
 	logPath := filepath.Join(j.logsDir(), runID+".jsonl")
 	if _, err := os.Stat(logPath); err == nil {
-		if err := j.putWithRetry(ctx, logPath, func(r io.Reader) error {
-			return j.w.cl.PutRunLog(ctx, j.asn.JobId, runID, j.asn.Epoch, r)
+		if err := j.putWithRetry(cctx, logPath, func(r io.Reader) error {
+			return j.w.cl.PutRunLog(cctx, j.asn.JobId, runID, j.asn.Epoch, r)
 		}); err != nil {
 			log.Error("upload log", "err", err)
 		}
@@ -252,6 +255,8 @@ func (j *jobExec) reportRun(ctx context.Context, log *slog.Logger, runID string,
 }
 
 // patchRunOutcome sends PATCH /runs/{run_id}; outcome "" keeps the outcome unset.
+// It is a service request (it reports the terminal state of the run), so it
+// runs on the service context and keeps its retries after a cancellation.
 func (j *jobExec) patchRunOutcome(ctx context.Context, runID string, res agents.Result, outcome httpapi.PatchRunRequestOutcome, errText string) {
 	if j.stale.Load() {
 		return
@@ -274,9 +279,10 @@ func (j *jobExec) patchRunOutcome(ctx context.Context, runID string, res agents.
 	if errText != "" {
 		req.Error = &errText
 	}
-	if err := j.w.cl.PatchRun(ctx, j.asn.JobId, runID, req); err != nil {
+	if err := j.w.cl.PatchRun(j.serviceCtx(ctx), j.asn.JobId, runID, req); err != nil {
 		if isStale(err) {
 			j.stale.Store(true)
+			j.stopWork()
 		}
 		j.log.Error("patch run", "err", err)
 	}
@@ -295,7 +301,7 @@ func (j *jobExec) postQuestion(ctx context.Context, runID, text string) error {
 		}
 	}
 	j.saveState()
-	return j.w.cl.Question(ctx, j.asn.JobId, j.asn.Epoch, text)
+	return j.w.cl.Question(j.serviceCtx(ctx), j.asn.JobId, j.asn.Epoch, text)
 }
 
 // buildPrompt renders the stage prompt (06-prompts.md).
