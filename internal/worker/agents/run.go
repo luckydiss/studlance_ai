@@ -99,13 +99,26 @@ const truncateBudget = 900 * 1024 // ~900 KiB
 // minTruncField is the smallest string field truncateJSONLine will cut.
 const minTruncField = 1024
 
+// drainGrace bounds how long Run waits for the stdout/stderr readers after
+// the process tree is gone: a process that escaped the job object could still
+// hold a pipe. Package-level so tests can shrink it.
+var drainGrace = 5 * time.Second
+
 // Run starts the agent process, pumps its stdout through the parser, mirrors
-// both streams into the raw log and delivers step batches until the process
-// exits or ctx is done (then the whole process tree is killed).
+// both streams into the raw log and delivers step batches.
+//
+// The process exit and the end of the pipe streams are tracked separately:
+// the parent can exit while a child it spawned still holds the inherited
+// stdout/stderr handles, so waiting for EOF first would hang Run. Once the
+// parent exits, the whole job is closed (killing such children) and only then
+// is the rest of the log drained.
 //
 // Reading (stdout/stderr, plus parsing) and sending (RunSpec.Send) run on
-// separate goroutines: a stuck network never stalls the agent on a full
-// pipe.
+// separate goroutines: a stuck network never stalls the agent on a full pipe.
+//
+// Run owns the stdio pipes (they are plain os.Pipe files, not exec's
+// StdoutPipe/StderrPipe): cmd.Wait must never close them behind a reader's
+// back.
 func Run(ctx context.Context, spec RunSpec) (Result, error) {
 	var parser Parser
 	switch spec.Agent {
@@ -125,33 +138,46 @@ func Run(ctx context.Context, spec RunSpec) (Result, error) {
 
 	cmd := exec.Command(spec.Command, spec.Args...)
 	cmd.Dir = spec.Dir
-	stdin, err := cmd.StdinPipe()
+
+	// Own every end of the stdio pipes. The child ends are closed in the
+	// parent right after Start, otherwise our read ends would never see EOF.
+	stdinR, stdinW, err := os.Pipe()
 	if err != nil {
 		return Result{}, fmt.Errorf("agents: stdin pipe: %w", err)
 	}
-	stdout, err := cmd.StdoutPipe()
+	stdoutR, stdoutW, err := os.Pipe()
 	if err != nil {
+		closeFiles(stdinR, stdinW)
 		return Result{}, fmt.Errorf("agents: stdout pipe: %w", err)
 	}
-	stderr, err := cmd.StderrPipe()
+	stderrR, stderrW, err := os.Pipe()
 	if err != nil {
+		closeFiles(stdinR, stdinW, stdoutR, stdoutW)
 		return Result{}, fmt.Errorf("agents: stderr pipe: %w", err)
 	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdinR, stdoutW, stderrW
 
 	group := procwin.NewGroup()
 	group.Prepare(cmd)
 	if err := cmd.Start(); err != nil {
+		closeFiles(stdinR, stdinW, stdoutR, stdoutW, stderrR, stderrW)
+		group.Close()
 		return Result{}, fmt.Errorf("agents: start %s: %w", spec.Command, err)
 	}
+	// The child got its own duplicated handles: release ours so the read
+	// ends observe EOF when every holder exits.
+	closeFiles(stdinR, stdoutW, stderrW)
 	if err := group.Add(cmd); err != nil {
 		_ = cmd.Process.Kill()
+		closeFiles(stdoutR, stderrR, stdinW)
+		group.Close()
 		return Result{}, fmt.Errorf("agents: add to group: %w", err)
 	}
 
 	// The prompt goes to stdin, then stdin is closed so the agent starts.
 	go func() {
-		_, _ = io.WriteString(stdin, spec.Prompt)
-		_ = stdin.Close()
+		_, _ = io.WriteString(stdinW, spec.Prompt)
+		_ = stdinW.Close()
 	}()
 
 	var logMu sync.Mutex
@@ -169,7 +195,7 @@ func Run(ctx context.Context, spec RunSpec) (Result, error) {
 	}
 
 	// requestKill kills the whole tree exactly once: ctx cancellation and a
-	// Send error both go through it. killReq arms the wait-timeout watcher.
+	// Send error both go through it.
 	killReq := make(chan struct{})
 	var killOnce sync.Once
 	requestKill := func() {
@@ -180,21 +206,14 @@ func Run(ctx context.Context, spec RunSpec) (Result, error) {
 	}
 	var killTimeout atomic.Bool
 
-	// Reap the process once both pipes are drained; Wait must not run while
-	// the pipes are still being read.
-	stdoutDone := make(chan struct{})
-	stderrDone := make(chan struct{})
+	// The process exit is awaited on its own goroutine, independently of the
+	// pipe readers: cmd.Wait must not be held back by a child that inherited
+	// the stdio handles.
 	waitCh := make(chan error, 1)
-	waitDone := make(chan struct{})
-	go func() {
-		<-stdoutDone
-		<-stderrDone
-		waitCh <- cmd.Wait()
-		close(waitDone)
-	}()
+	go func() { waitCh <- cmd.Wait() }()
 
 	// Kill the whole tree when the context is done; finished closes when Run
-	// is about to return so the watchers never linger.
+	// is about to return so the watcher never lingers.
 	finished := make(chan struct{})
 	defer close(finished)
 	go func() {
@@ -205,33 +224,15 @@ func Run(ctx context.Context, spec RunSpec) (Result, error) {
 		}
 	}()
 
-	// Bound the wait after a kill: if the process still has not exited,
-	// close the pipes so the readers and Wait can finish.
-	go func() {
-		select {
-		case <-killReq:
-		case <-finished:
-			return
-		}
-		timer := time.NewTimer(killWaitTimeout)
-		defer timer.Stop()
-		select {
-		case <-waitDone:
-		case <-timer.C:
-			killTimeout.Store(true)
-			_ = stdout.Close()
-			_ = stderr.Close()
-		}
-	}()
-
 	queue := newStepQueue()
 
 	// The stdout reader owns the parser: it logs every line in full
 	// (however long), feeds compacted lines to the parser and queues new
 	// steps with their Seq numbers. Steps are drained from the parser after
 	// every line, so neither the parser nor the raw line buffers accumulate.
+	stdoutDone := make(chan struct{})
 	go func() {
-		br := bufio.NewReaderSize(stdout, 64<<10)
+		br := bufio.NewReaderSize(stdoutR, 64<<10)
 		seq := 0
 		notified := false
 		readLines(br, func(line []byte) {
@@ -263,14 +264,17 @@ func Run(ctx context.Context, spec RunSpec) (Result, error) {
 		})
 		queue.close()
 		close(stdoutDone)
+		closeFiles(stdoutR)
 	}()
 
+	stderrDone := make(chan struct{})
 	go func() {
-		br := bufio.NewReaderSize(stderr, 64<<10)
+		br := bufio.NewReaderSize(stderrR, 64<<10)
 		readLines(br, func(line []byte) {
 			logStderr(string(line))
 		})
 		close(stderrDone)
+		closeFiles(stderrR)
 	}()
 
 	// The sender is the only caller of Send; a blocking Send never stalls
@@ -289,7 +293,45 @@ func Run(ctx context.Context, spec RunSpec) (Result, error) {
 		close(senderDone)
 	}
 
-	<-stdoutDone
+	// Wait for the parent process, not for EOF: a child may keep the pipes.
+	var waitErr error
+	select {
+	case waitErr = <-waitCh:
+		// The parent exited: reap what it left behind (a child may still hold
+		// our stdio handles), so the readers reach EOF. Kill reaps the job on
+		// Windows, Close releases the group handle on every platform.
+		group.Kill()
+		group.Close()
+	case <-killReq:
+		timer := time.NewTimer(killWaitTimeout)
+		select {
+		case waitErr = <-waitCh:
+		case <-timer.C:
+			// The tree ignored the kill: unblock the readers by closing the
+			// read ends, and report the failure explicitly below.
+			killTimeout.Store(true)
+		}
+		timer.Stop()
+		group.Close()
+		if killTimeout.Load() {
+			closeFiles(stdoutR, stderrR)
+		}
+	}
+
+	// Drain the rest of the log: the readers stop at EOF or when Run closes
+	// the read ends (kill timeout / a process that escaped the job).
+	drained := make(chan struct{})
+	go func() {
+		<-stdoutDone
+		<-stderrDone
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(drainGrace):
+		closeFiles(stdoutR, stderrR)
+		<-drained
+	}
 
 	// Final flush: wait for the sender to drain the queue, unless ctx is
 	// already done (then the process was killed; do not wait for the
@@ -300,10 +342,6 @@ func Run(ctx context.Context, spec RunSpec) (Result, error) {
 		flushed = true
 	case <-ctx.Done():
 	}
-	waitErr := <-waitCh
-	// The process is dead: release the job/group handle (KILL_ON_JOB_CLOSE
-	// would reap any stragglers spawned after the kill).
-	group.Close()
 
 	res := Result{Usage: parser.Usage(), KillTimeout: killTimeout.Load()}
 	if msg, ok := parser.Failed(); ok {
@@ -319,10 +357,22 @@ func Run(ctx context.Context, spec RunSpec) (Result, error) {
 			return res, fmt.Errorf("agents: wait: %w", waitErr)
 		}
 	}
+	if killTimeout.Load() {
+		return res, fmt.Errorf("agents: process tree did not exit within %s after kill", killWaitTimeout)
+	}
 	if flushed && sendErr != nil {
 		return res, fmt.Errorf("agents: send steps: %w", sendErr)
 	}
 	return res, nil
+}
+
+// closeFiles closes the given files, ignoring errors and nil entries.
+func closeFiles(files ...*os.File) {
+	for _, f := range files {
+		if f != nil {
+			_ = f.Close()
+		}
+	}
 }
 
 // readLines reads r line by line with no length limit; fn gets every line

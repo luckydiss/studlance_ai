@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -38,11 +39,45 @@ func heapAlloc() uint64 {
 //     HELPER_LINE_BYTES (default 900 KiB) of 'x' in aggregated_output each,
 //     then HELPER_MARKER, then HELPER_TAIL_LINES small agent_message items,
 //     exit HELPER_EXIT.
+//   - "parentexit": parent starts a grandchild that inherits stdout/stderr
+//     (HELPER_GRANDCHILD_SLEEP_MS, default 120 s), records its pid in
+//     HELPER_GRANDCHILD_PID_FILE, writes two agent_message items and exits
+//     while the grandchild is still alive. HELPER_GRANDCHILD=1 makes the
+//     re-executed helper the sleeping grandchild itself.
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
 	}
 	exitCode, _ := strconv.Atoi(os.Getenv("HELPER_EXIT"))
+
+	if os.Getenv("HELPER_MODE") == "parentexit" {
+		if os.Getenv("HELPER_GRANDCHILD") == "1" {
+			sleepMs, _ := strconv.Atoi(os.Getenv("HELPER_GRANDCHILD_SLEEP_MS"))
+			if sleepMs <= 0 {
+				sleepMs = 120000
+			}
+			time.Sleep(time.Duration(sleepMs) * time.Millisecond)
+			os.Exit(0)
+		}
+		fmt.Println(`{"type":"thread.started","thread_id":"helper-thread-parent"}`)
+		child := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$", "--")
+		child.Env = append(os.Environ(), "HELPER_GRANDCHILD=1")
+		child.Stdout = os.Stdout
+		child.Stderr = os.Stderr
+		if err := child.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, "grandchild start:", err)
+			os.Exit(2)
+		}
+		fmt.Println(`{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"parent before exit"}}`)
+		if pidFile := os.Getenv("HELPER_GRANDCHILD_PID_FILE"); pidFile != "" {
+			_ = os.WriteFile(pidFile, []byte(strconv.Itoa(child.Process.Pid)), 0o644)
+		}
+		if marker := os.Getenv("HELPER_MARKER"); marker != "" {
+			_ = os.WriteFile(marker, []byte("done"), 0o644)
+		}
+		fmt.Println(`{"type":"item.completed","item":{"id":"m2","type":"agent_message","text":"parent last line"}}`)
+		os.Exit(exitCode)
+	}
 
 	if os.Getenv("HELPER_MODE") == "bigoutput" {
 		n, _ := strconv.Atoi(os.Getenv("HELPER_LINES"))
