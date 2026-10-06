@@ -267,7 +267,9 @@ func TestCodexRealOutOfCredits(t *testing.T) {
 // TestCodexRealBeamPartial parses a real codex-cli 0.160.0 log (recorded
 // 2026-10-05 in C:\work\job on a fictional beam-calc task; the workspace ran
 // out of credits mid-run, hence the trailing error + turn.failed). Sanitized:
-// username replaced, no personal data.
+// username replaced, no personal data. It is kept as an explicitly partial
+// run; the successful run and its resume are recorded in
+// codex_real_beam.jsonl / codex_real_beam_resume.jsonl (TestCodexRealBeam).
 func TestCodexRealBeamPartial(t *testing.T) {
 	p := NewCodexParser()
 	feedFile(t, p, "testdata/codex_real_beam_partial.jsonl")
@@ -292,5 +294,44 @@ func TestCodexRealBeamPartial(t *testing.T) {
 		if len([]rune(s.Summary)) > 300 {
 			t.Fatalf("summary over 300 runes: %.40s", s.Summary)
 		}
+	}
+}
+
+// TestCodexRealBeam parses the recorded successful codex-cli 0.160.0 run and
+// its resume (2026-10-06, fictional beam-calc task in C:\work\job; the user
+// name and the working folder are replaced, there are no model identifiers).
+func TestCodexRealBeam(t *testing.T) {
+	p := NewCodexParser()
+	feedFile(t, p, "testdata/codex_real_beam.jsonl")
+	if p.ThreadID() == "" {
+		t.Fatal("no thread id")
+	}
+	if _, failed := p.Failed(); failed {
+		t.Fatal("a successful run reported a failure")
+	}
+	types := map[string]int{}
+	for _, s := range p.Steps() {
+		types[s.Type]++
+	}
+	for _, want := range []string{"command", "file", "message", "result"} {
+		if types[want] == 0 {
+			t.Fatalf("no %q step; types = %v", want, types)
+		}
+	}
+	if u := p.Usage(); u.InputTokens <= 0 || u.OutputTokens <= 0 {
+		t.Fatalf("usage = %+v", u)
+	}
+
+	// The resume continues the same thread and is successful too.
+	q := NewCodexParser()
+	feedFile(t, q, "testdata/codex_real_beam_resume.jsonl")
+	if q.ThreadID() != p.ThreadID() {
+		t.Fatalf("resume thread id = %q, want %q", q.ThreadID(), p.ThreadID())
+	}
+	if _, failed := q.Failed(); failed {
+		t.Fatal("a successful resume reported a failure")
+	}
+	if u := q.Usage(); u.InputTokens <= 0 || u.OutputTokens <= 0 {
+		t.Fatalf("resume usage = %+v", u)
 	}
 }
