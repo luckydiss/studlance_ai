@@ -1,11 +1,19 @@
-// Command studlance-worker runs the execution agent on Windows.
-//
-// This is a skeleton: serve and probe are stubs for PR 1.
+// Command studlance-worker runs the execution agent on Windows
+// (05-worker.md): serve runs the claim loop, probe prints capabilities.
 package main
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/signal"
+	"sort"
+	"syscall"
+
+	"github.com/luckydiss/studlance_ai/internal/config"
+	"github.com/luckydiss/studlance_ai/internal/worker"
+	"github.com/luckydiss/studlance_ai/internal/worker/client"
 )
 
 func main() {
@@ -20,12 +28,41 @@ func run(args []string) error {
 		usage()
 		return fmt.Errorf("no command")
 	}
+	execPath, _ := os.Executable()
 	switch args[0] {
 	case "serve":
-		fmt.Println("not implemented")
-		return nil
+		cfgPath, _, err := config.DefaultWorkerConfigPath(args[1:], execPath)
+		if err != nil {
+			return err
+		}
+		cfg, err := config.LoadWorker(cfgPath)
+		if err != nil {
+			return err
+		}
+		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+		w := worker.New(cfg, client.New(cfg.ServerURL, cfg.Token), logger)
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		logger.Info("worker started", "name", cfg.Name, "server", cfg.ServerURL, "work_dir", cfg.WorkDir)
+		return w.Run(ctx)
 	case "probe":
-		fmt.Println("not implemented")
+		cfgPath, _, err := config.DefaultWorkerConfigPath(args[1:], execPath)
+		if err != nil {
+			return err
+		}
+		cfg := config.LoadWorkerSoft(cfgPath)
+		caps, info := worker.Probe(cfg)
+		sort.Strings(caps)
+		fmt.Println("Capabilities:")
+		for _, c := range caps {
+			fmt.Println(" ", c)
+		}
+		fmt.Println("Info:")
+		for _, k := range []string{"codex_version", "claude_version", "python_version", "libreoffice_version", "os", "arch", "hostname"} {
+			if v, ok := info[k]; ok {
+				fmt.Printf("  %s: %v\n", k, v)
+			}
+		}
 		return nil
 	case "-h", "--help", "help":
 		usage()
@@ -41,6 +78,6 @@ func usage() {
 
 Commands:
   serve [--config worker.toml]   run the worker loop
-  probe                          print detected codex/claude versions and capabilities
+  probe [--config worker.toml]   print detected codex/claude versions and capabilities
 `)
 }

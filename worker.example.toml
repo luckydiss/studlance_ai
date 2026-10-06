@@ -8,6 +8,12 @@ pdftoppm = 'C:\studlance\poppler\bin\pdftoppm.exe'
 command = "codex"
 args = []
 
+# Для локальной проверки без настоящих агентов — фейковые из cmd/fakeagent
+# (маркеры в тексте запроса: #ask, #fail-once, #fail-verify, #hang, #no-pdf):
+# [codex]
+# command = 'C:\studlance\fakeagent.exe'
+# args = ["codex"]
+
 [claude]
 command = "claude"
 args = []

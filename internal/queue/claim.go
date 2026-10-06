@@ -349,11 +349,12 @@ func (q *Queue) fillRevision(ctx context.Context, asn *Assignment) error {
 	if err != nil {
 		return err
 	}
-	remarksPrefix := "revision-" + strconv.FormatInt(n, 10) + "/remarks/"
+	// Every file attached to this rework is an ordinary input file, including
+	// one named remarks/<idx>.png: the crops of the worker live in their own
+	// namespace (revision-crops/) and are not inputs (02-data.md).
 	for _, f := range input {
-		p := strings.TrimPrefix(f.Path, "input/")
-		if f.Revision == n && !strings.HasPrefix(p, remarksPrefix) {
-			info.Files = append(info.Files, p)
+		if f.Revision == n {
+			info.Files = append(info.Files, strings.TrimPrefix(f.Path, "input/"))
 		}
 	}
 	asn.Revision = info

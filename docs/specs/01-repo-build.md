@@ -75,7 +75,7 @@ pdftoppm = 'C:\studlance\poppler\bin\pdftoppm.exe'
 
 [codex]
 command = "codex"
-args = []                          # доп. аргументы, например ["-m", "gpt-5-codex"]
+args = []                          # доп. аргументы, например ["--model", "<модель>"]
 
 [claude]
 command = "claude"

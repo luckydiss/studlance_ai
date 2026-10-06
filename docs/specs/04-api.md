@@ -140,7 +140,7 @@
 | POST | `/jobs/{id}/state` | `{epoch, state: {codex_thread_id?, claude_session_id?, prompts_version?}}` → 204 (merge в `jobs.state`) |
 | PUT | `/jobs/{id}/snapshot/{draft\|v<n>}/files?path=` | `?epoch=`, тело — байты файла из `out/` → 204 |
 | PUT | `/jobs/{id}/snapshot/{draft\|v<n>}/pages/{document_idx}/{page}` и `/thumbs/…` (`{page}` — `16.png`) | `?epoch=` → 204 |
-| PUT | `/jobs/{id}/input/revision/{n}/remarks/{idx}` | `?epoch=`, вырезка выделенного места → 204 |
+| PUT | `/jobs/{id}/input/revision/{n}/remarks/{idx}` | `?epoch=`, вырезка выделенного места → 204; форма endpoint'а не меняется, но хранится вырезка отдельно от входных файлов: `files` с `kind = crop`, `path = revision-crops/<n>/<idx>.png`, blob `jobs/<id>/revision-crops/<n>/<idx>.png` ([02-data.md](02-data.md)) |
 | POST | `/jobs/{id}/snapshot/{draft\|v<n>}/commit` | `{epoch, title?, documents: [{idx, title, kind, file_path, preview_path?, page_count, pages: [{page, width, height, changed_boxes}]}], verification?}` → 204; фиксирует снимок, записывает `documents`/`pages`; для `draft` — `stage = verify`, `title`; для `v<n>` ничего не выдаёт клиенту (это делает `finish`) |
 | POST | `/jobs/{id}/question` | `{epoch, text}` → 204, `needs_input` |
 | POST | `/jobs/{id}/finish` | `{epoch, outcome: ok\|failed\|canceled\|timeout, version?, error?}` → 204 (см. переходы в [03-lifecycle.md](03-lifecycle.md)) |

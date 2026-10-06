@@ -94,5 +94,35 @@ func LoadWorker(path string) (Worker, error) {
 	if w.Name == "" {
 		return Worker{}, errors.New("worker.toml: name is required")
 	}
+	if w.WorkDir == "" {
+		return Worker{}, errors.New("worker.toml: work_dir is required")
+	}
+	abs, err := filepath.Abs(w.WorkDir)
+	if err != nil {
+		return Worker{}, fmt.Errorf("worker.toml: work_dir: %w", err)
+	}
+	w.WorkDir = abs
+	if w.Codex.Command == "" {
+		w.Codex.Command = "codex"
+	}
+	if w.Claude.Command == "" {
+		w.Claude.Command = "claude"
+	}
 	return w, nil
+}
+
+// LoadWorkerSoft reads worker.toml if it exists, without requiring fields —
+// for probe, which also works with bare defaults (codex/claude from PATH).
+func LoadWorkerSoft(path string) Worker {
+	var w Worker
+	if data, err := os.ReadFile(path); err == nil {
+		_ = toml.Unmarshal(data, &w)
+	}
+	if w.Codex.Command == "" {
+		w.Codex.Command = "codex"
+	}
+	if w.Claude.Command == "" {
+		w.Claude.Command = "claude"
+	}
+	return w
 }
