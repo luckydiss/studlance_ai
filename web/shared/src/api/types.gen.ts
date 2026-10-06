@@ -1105,6 +1105,7 @@ export interface components {
             email: string;
             password: string;
         };
+        /** @description Запрос может быть пустым (заказ с одними файлами); submit всё равно требует файл или запрос от 20 символов (03-lifecycle.md). */
         CreateJobRequest: {
             prompt: string;
         };

@@ -62,7 +62,7 @@ docs/                            архитектура, дизайн, спек�
 | `--stage-timeout` | `STUDLANCE_STAGE_TIMEOUT` | `3h` | таймаут этапа |
 | `--max-upload` | `STUDLANCE_MAX_UPLOAD` | `2GB` | лимит суммарного размера файлов заказа |
 
-Папка данных: `data/studlance.db`, `data/blobs/…` (см. [02-data.md](02-data.md)), `data/demo/` (картинки для `/new`), `data/logs/`.
+Папка данных: `data/studlance.db`, `data/blobs/…` (см. [02-data.md](02-data.md)), `data/demo/` (картинки для `/`), `data/logs/`.
 
 **Воркер** — `worker.toml` рядом с exe (путь можно задать `--config`):
 

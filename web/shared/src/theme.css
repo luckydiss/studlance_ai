@@ -115,3 +115,206 @@ button {
 .sl-button:hover {
   background: var(--sl-action-hover);
 }
+
+.sl-button:disabled {
+  background: var(--sl-border);
+  color: #9a9da3;
+  cursor: default;
+}
+
+/* Toasts (07-web-client.md: bottom center, 4 s). */
+
+.sl-toasts {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.sl-toast {
+  background: var(--sl-text);
+  color: var(--sl-surface);
+  font-size: 14px;
+  line-height: 1.4;
+  padding: 10px 16px;
+  border-radius: 10px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.18), 0 12px 32px rgba(21, 23, 26, 0.22);
+  max-width: 480px;
+}
+
+/* Sheet placeholders pulse softly while the kit is being prepared (07). */
+
+@keyframes sl-planned-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.sl-planned-sheet--pulse {
+  animation: sl-planned-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes sl-dot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 4px #e3e8f6;
+  }
+  50% {
+    box-shadow: 0 0 0 7px #e3e8f6;
+  }
+}
+
+/* Extra keyframes from the Main mockup (helmet <style>) for the carousel. */
+
+@keyframes sl-swipe {
+  0%,
+  17% {
+    transform: translateX(0);
+  }
+  20%,
+  37% {
+    transform: translateX(-20%);
+  }
+  40%,
+  57% {
+    transform: translateX(-40%);
+  }
+  60%,
+  77% {
+    transform: translateX(-60%);
+  }
+  80%,
+  97% {
+    transform: translateX(-80%);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sl-planned-sheet--pulse,
+  .sl-dot-pulse {
+    animation: none !important;
+  }
+}
+
+/* App shell / header (Main.dc.html header). */
+
+.sl-app {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.sl-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  color: var(--sl-text-muted);
+}
+
+.sl-header {
+  height: 56px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 28px;
+  background: var(--sl-surface);
+  border-bottom: 1px solid var(--sl-border);
+}
+
+.sl-header-left {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+
+.sl-header nav {
+  display: flex;
+  gap: 20px;
+  font-size: 14px;
+}
+
+.sl-header-link {
+  text-decoration: none;
+  color: var(--sl-text);
+  font-weight: 500;
+}
+
+.sl-header-user {
+  position: relative;
+}
+
+.sl-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 0;
+  background: #e6e8ee;
+  color: var(--sl-text);
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.sl-user-menu {
+  position: absolute;
+  top: 40px;
+  right: 0;
+  min-width: 200px;
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-border);
+  border-radius: 12px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06), 0 16px 40px rgba(21, 23, 26, 0.16);
+  padding: 8px;
+  z-index: 500;
+}
+
+.sl-user-menu-email {
+  font-size: 13px;
+  color: var(--sl-text-muted);
+  padding: 6px 10px;
+  overflow-wrap: anywhere;
+}
+
+.sl-user-menu-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.sl-user-menu-item:hover {
+  background: #f2f3f5;
+}
+
+@media (max-width: 760px) {
+  .sl-header {
+    padding: 0 16px;
+    gap: 12px;
+  }
+  .sl-header-left {
+    gap: 16px;
+  }
+}

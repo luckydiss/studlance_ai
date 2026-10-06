@@ -1,0 +1,141 @@
+.loginPage {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: #fff;
+}
+.loginCard {
+  width: 360px;
+  max-width: 100%;
+  border: 1px solid #e4e5e8;
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+}
+.loginCard h1 {
+  margin: 0 0 24px;
+  font-size: 24px;
+  font-weight: 600;
+}
+.loginCard label {
+  margin-bottom: 6px;
+}
+.loginCard input {
+  min-width: 0;
+  width: 100%;
+  font: inherit;
+  border: 1px solid #d9dbe0;
+  border-radius: 16px;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+}
+.primary {
+  display: inline-block;
+  border: 0;
+  background: #1f3a93;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: 10px;
+  cursor: pointer;
+  text-decoration: none;
+  text-align: center;
+}
+.primary:hover {
+  background: #162c70;
+  color: #fff;
+}
+.primary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.loginCard .primary {
+  display: block;
+  width: 100%;
+}
+.error {
+  color: #c92a2a;
+  margin: 12px 0 0;
+}
+.ordersPage {
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+.ordersHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.ordersHeading h1 {
+  font-size: 28px;
+  font-weight: 600;
+  margin: 0;
+}
+.orderList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.orderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid #e4e5e8;
+  padding: 20px 0;
+  text-decoration: none;
+  color: #15171a;
+}
+.orderRow:hover {
+  color: #15171a;
+  background: #f7f8fa;
+}
+.orderInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.orderTitle {
+  font-size: 16px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.orderMeta {
+  font-size: 14px;
+  color: #686c73;
+}
+.orderStatus {
+  flex: none;
+  font-size: 14px;
+}
+.message {
+  display: block;
+  color: #686c73;
+  text-align: center;
+  padding: 40px 0;
+}
+@media (max-width: 760px) {
+  .ordersPage {
+    padding: 24px 16px;
+  }
+  .ordersHeading {
+    flex-wrap: wrap;
+  }
+  .orderRow {
+    gap: 12px;
+  }
+  .orderStatus {
+    max-width: 42%;
+  }
+}

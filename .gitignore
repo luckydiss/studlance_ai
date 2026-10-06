@@ -31,3 +31,4 @@ Thumbs.db
 # Local config with secrets
 worker.toml
 !worker.example.toml
+.brief-*.txt
