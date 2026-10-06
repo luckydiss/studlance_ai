@@ -31,12 +31,18 @@ type retryRecorder struct {
 	mu       sync.Mutex
 	attempts map[string]int
 	finishes []string
+	seen     map[string]bool // finish outcome already attempted
 
 	putDrop int // drop this many first snapshot-file PUTs (broken connection)
 
+	// failFirstFinish makes the first attempt of the given finish outcome
+	// answer 500 (the server did not apply it); a retry would succeed.
+	failFirstFinish map[string]bool
+
 	commitStarted chan struct{} // closed on the first commit attempt
 	putStarted    chan struct{} // closed on the first snapshot-file PUT
-	finishStarted chan struct{} // closed on the first finish-ok attempt
+	finishStarted chan struct{} // closed on the first finish attempt
+	finishOnce    sync.Once
 
 	cancelHeartbeat atomic.Bool
 	staleHeartbeat  atomic.Bool
@@ -45,10 +51,12 @@ type retryRecorder struct {
 func newRetryRecorder(t *testing.T) *retryRecorder {
 	t.Helper()
 	rec := &retryRecorder{
-		attempts:      map[string]int{},
-		commitStarted: make(chan struct{}),
-		putStarted:    make(chan struct{}),
-		finishStarted: make(chan struct{}),
+		attempts:        map[string]int{},
+		seen:            map[string]bool{},
+		failFirstFinish: map[string]bool{},
+		commitStarted:   make(chan struct{}),
+		putStarted:      make(chan struct{}),
+		finishStarted:   make(chan struct{}),
 	}
 	rec.srv = httptest.NewServer(rec.handler())
 	t.Cleanup(rec.srv.Close)
@@ -109,16 +117,21 @@ func (r *retryRecorder) handler() http.Handler {
 			var fr httpapi.FinishRequest
 			_ = json.NewDecoder(req.Body).Decode(&fr)
 			outcome := string(fr.Outcome)
+			first := r.bump("finish:"+outcome) == 1
 			r.mu.Lock()
 			r.finishes = append(r.finishes, outcome)
+			already := r.seen[outcome]
+			r.seen[outcome] = true
+			fail := r.failFirstFinish[outcome] && !already
 			r.mu.Unlock()
-			// The first ok attempt fails, its retry would succeed.
-			if outcome == string(httpapi.FinishRequestOutcomeOk) {
-				if r.bump("finish:ok") == 1 {
-					close(r.finishStarted)
-					w.WriteHeader(http.StatusInternalServerError)
-					return
-				}
+			if first {
+				r.finishOnce.Do(func() { close(r.finishStarted) })
+			}
+			// The first attempt of this outcome fails, a retry would succeed:
+			// exactly what the client's internal retry loop does.
+			if fail {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
 			}
 			w.WriteHeader(http.StatusNoContent)
 		case strings.Contains(p, "/snapshot/") && strings.HasSuffix(p, "/files"):
@@ -186,8 +199,9 @@ func retryJob(t *testing.T, rec *retryRecorder, cfg config.Worker, docs ...strin
 }
 
 // cancellableJob builds the job/service contexts the way run() does, so tests
-// can exercise the real cancellation wiring.
-func cancellableJob(t *testing.T, rec *retryRecorder, cfg config.Worker, heartbeat time.Duration, docs ...string) (*jobExec, context.Context) {
+// can exercise the real cancellation wiring. The returned cancel function
+// stops the job context (as Ctrl+C does).
+func cancellableJob(t *testing.T, rec *retryRecorder, cfg config.Worker, heartbeat time.Duration, docs ...string) (*jobExec, context.Context, context.CancelFunc) {
 	t.Helper()
 	j := retryJob(t, rec, cfg, docs...)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -219,7 +233,7 @@ func cancellableJob(t *testing.T, rec *retryRecorder, cfg config.Worker, heartbe
 	t.Cleanup(func() { close(hbDone) })
 	// Give the heartbeat loop a moment to start before the test arms cancel.
 	time.Sleep(2 * heartbeat)
-	return j, ctx
+	return j, ctx, cancel
 }
 
 // Пункт 4 (третий раунд): после подтверждённой отмены внутренние повторы
@@ -242,7 +256,7 @@ func TestCancelStopsCommitRetry(t *testing.T) {
 			const heartbeat = 20 * time.Millisecond
 			rec := newRetryRecorder(t)
 			cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: heartbeat.String()}}
-			j, ctx := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
+			j, ctx, _ := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
 			j.stage = tc.stage
 			j.asn.Version = tc.version
 
@@ -278,8 +292,9 @@ func TestCancelStopsCommitRetry(t *testing.T) {
 func TestCancelStopsFinishOkRetry(t *testing.T) {
 	const heartbeat = 20 * time.Millisecond
 	rec := newRetryRecorder(t)
+	rec.failFirstFinish["ok"] = true
 	cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: heartbeat.String()}}
-	j, ctx := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
+	j, ctx, _ := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
 
 	v := 1
 	done := make(chan struct{})
@@ -287,7 +302,8 @@ func TestCancelStopsFinishOkRetry(t *testing.T) {
 		j.finishOk(ctx, &v)
 		close(done)
 	}()
-	// Arm the cancellation while the first finish-ok attempt is failing.
+	// The first finish-ok attempt fails (500); arm the cancellation while the
+	// client is in its retry backoff.
 	waitClosed(t, rec.finishStarted, "first finish ok attempt")
 	rec.cancelHeartbeat.Store(true)
 	select {
@@ -310,7 +326,7 @@ func TestStaleLeaseStopsRetryWithoutFinish(t *testing.T) {
 	const heartbeat = 20 * time.Millisecond
 	rec := newRetryRecorder(t)
 	cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: heartbeat.String()}}
-	j, ctx := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
+	j, ctx, _ := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
 
 	done := make(chan bool, 1)
 	go func() { done <- j.commitVersion(j.activeCtx(ctx), 1, "draft") }()
@@ -345,7 +361,7 @@ func TestCancelStopsUploadRetryOnNetworkError(t *testing.T) {
 	rec := newRetryRecorder(t)
 	rec.putDrop = 1
 	cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: heartbeat.String()}}
-	j, ctx := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
+	j, ctx, _ := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
 
 	done := make(chan bool, 1)
 	go func() { done <- j.commitVersion(j.activeCtx(ctx), 1, "draft") }()
@@ -369,5 +385,125 @@ func TestCancelStopsUploadRetryOnNetworkError(t *testing.T) {
 	}
 	if got := rec.finishOutcomes(); !reflect.DeepEqual(got, []string{"canceled"}) {
 		t.Fatalf("finishes = %v, want [canceled]", got)
+	}
+}
+
+// Пункт 2 (4-й раунд): если отмена подтверждается во время отправки или
+// backoff терминального finish failed/timeout, исходный запрос не повторяется,
+// а на служебном контексте уходит finish canceled. Первый finish получает 500
+// (сервер его не применил).
+func TestCancelTurnsTerminalFinishIntoCanceled(t *testing.T) {
+	for _, outcome := range []string{"failed", "timeout"} {
+		t.Run(outcome, func(t *testing.T) {
+			const heartbeat = 20 * time.Millisecond
+			rec := newRetryRecorder(t)
+			rec.failFirstFinish[outcome] = true
+			cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: heartbeat.String()}}
+			j, ctx, _ := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
+
+			done := make(chan struct{})
+			go func() {
+				j.finish(ctx, httpapi.FinishRequestOutcome(outcome), nil, "boom")
+				close(done)
+			}()
+			// The first attempt is failing; the cancellation is confirmed
+			// while the client sits in its retry backoff.
+			waitClosed(t, rec.finishStarted, "first finish attempt")
+			rec.cancelHeartbeat.Store(true)
+			select {
+			case <-done:
+			case <-time.After(20 * time.Second):
+				t.Fatal("finish did not return")
+			}
+
+			if got := rec.attempt("finish:" + outcome); got != 1 {
+				t.Fatalf("%s attempts = %d, want 1 (no retry after cancel)", outcome, got)
+			}
+			if got := rec.finishOutcomes(); !reflect.DeepEqual(got, []string{outcome, "canceled"}) {
+				t.Fatalf("finishes = %v, want [%s canceled]", got, outcome)
+			}
+		})
+	}
+}
+
+// Пункт 2 (4-й раунд): служебный finish canceled сохраняет повторы при
+// сетевых сбоях — первый canceled получает 500 и повторяется успешно.
+func TestCanceledFinishRetriesOnServiceContext(t *testing.T) {
+	const heartbeat = 20 * time.Millisecond
+	rec := newRetryRecorder(t)
+	rec.failFirstFinish["canceled"] = true
+	cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: heartbeat.String()}}
+	j, ctx, _ := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
+	// No cancellation is involved here: retry immediately instead of waiting
+	// for a flag that never appears.
+	j.w.cl = client.NewForTest(rec.srv.URL, "tok", func(context.Context, time.Duration) error { return nil })
+
+	j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
+
+	if got := rec.attempt("finish:canceled"); got != 2 {
+		t.Fatalf("canceled attempts = %d, want 2 (the service context keeps retrying)", got)
+	}
+	if got := rec.finishOutcomes(); !reflect.DeepEqual(got, []string{"canceled", "canceled"}) {
+		t.Fatalf("finishes = %v, want two canceled attempts", got)
+	}
+}
+
+// Пункт 2 (4-й раунд): потеря lease во время ожидания повтора терминального
+// finish — исходный запрос не повторяется и canceled не отправляется.
+func TestStaleLeaseStopsTerminalFinishRetry(t *testing.T) {
+	const heartbeat = 20 * time.Millisecond
+	rec := newRetryRecorder(t)
+	rec.failFirstFinish["failed"] = true
+	cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: heartbeat.String()}}
+	j, ctx, _ := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
+
+	done := make(chan struct{})
+	go func() {
+		j.finish(ctx, httpapi.FinishRequestOutcomeFailed, nil, "boom")
+		close(done)
+	}()
+	waitClosed(t, rec.finishStarted, "first finish attempt")
+	rec.staleHeartbeat.Store(true)
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("finish did not return")
+	}
+
+	if got := rec.attempt("finish:failed"); got != 1 {
+		t.Fatalf("failed attempts = %d, want 1 (no retry after stale lease)", got)
+	}
+	if got := rec.finishOutcomes(); !reflect.DeepEqual(got, []string{"failed"}) {
+		t.Fatalf("finishes = %v, want only the original failed", got)
+	}
+}
+
+// Пункт 2 (4-й раунд): остановка воркера (Ctrl+C) во время ожидания повтора —
+// исходный запрос не повторяется и canceled не отправляется.
+func TestCtrlCStopsTerminalFinishRetry(t *testing.T) {
+	const heartbeat = 20 * time.Millisecond
+	rec := newRetryRecorder(t)
+	rec.failFirstFinish["timeout"] = true
+	cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: heartbeat.String()}}
+	j, ctx, cancelJob := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
+
+	done := make(chan struct{})
+	go func() {
+		j.finish(ctx, httpapi.FinishRequestOutcomeTimeout, nil, "boom")
+		close(done)
+	}()
+	waitClosed(t, rec.finishStarted, "first finish attempt")
+	cancelJob()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("finish did not return")
+	}
+
+	if got := rec.attempt("finish:timeout"); got != 1 {
+		t.Fatalf("timeout attempts = %d, want 1 (no retry after shutdown)", got)
+	}
+	if got := rec.finishOutcomes(); !reflect.DeepEqual(got, []string{"timeout"}) {
+		t.Fatalf("finishes = %v, want only the original timeout", got)
 	}
 }

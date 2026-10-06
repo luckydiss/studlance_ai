@@ -217,9 +217,10 @@ func (j *jobExec) finishCanceledIfRequested(ctx context.Context) {
 	}
 }
 
-// finishOk reports success on the active context: a cancellation that arrives
-// while the finish-ok request is in flight stops its internal retries, and the
-// order is reported canceled instead of ok. A lost lease reports nothing.
+// finishOk reports success unless the order was canceled in the meantime (the
+// cancel flag always wins over a successful commit) or the lease was lost
+// (then there is nothing to report). finish re-evaluates the cancel flag after
+// a failed send, so a cancellation during the finish-ok request ends canceled.
 func (j *jobExec) finishOk(ctx context.Context, version *int) {
 	if j.stale.Load() {
 		return
@@ -228,14 +229,7 @@ func (j *jobExec) finishOk(ctx context.Context, version *int) {
 		j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
 		return
 	}
-	if err := j.sendFinish(j.activeCtx(ctx), httpapi.FinishRequestOutcomeOk, version, ""); err != nil {
-		j.log.Error("finish", "outcome", httpapi.FinishRequestOutcomeOk, "err", err)
-		if j.cancelRequested.Load() {
-			j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
-		}
-		return
-	}
-	j.log.Info("finished", "outcome", httpapi.FinishRequestOutcomeOk, "error", "")
+	j.finish(ctx, httpapi.FinishRequestOutcomeOk, version, "")
 }
 
 // heartbeatLoop extends the lease and watches for cancellation and fencing.
@@ -279,10 +273,13 @@ func (j *jobExec) heartbeatLoop(ctx context.Context, done chan struct{}) {
 
 // finish reports the terminal outcome; best-effort logs on top of it.
 //
-// The cancel flag always wins over ok/failed/timeout, and the context is
-// chosen by the outcome: canceled goes out on the service context (it must
-// survive the cancellation that caused it), everything else on the active
-// work context, so a cancellation stops their retries.
+// The cancel flag is evaluated before the first attempt and re-evaluated after
+// a failed one: when the cancellation is confirmed while the terminal request
+// or its retry backoff is in flight, the original ok/failed/timeout is not
+// repeated and canceled is reported on the service context instead. The
+// context is chosen by the outcome: canceled goes out on the service context
+// (it must survive the cancellation that caused it), everything else on the
+// active work context, so a cancellation stops their retries.
 func (j *jobExec) finish(ctx context.Context, outcome httpapi.FinishRequestOutcome, version *int, errText string) {
 	if j.stale.Load() {
 		return
@@ -294,11 +291,27 @@ func (j *jobExec) finish(ctx context.Context, outcome httpapi.FinishRequestOutco
 	if outcome == httpapi.FinishRequestOutcomeCanceled {
 		cctx = j.serviceCtx(ctx)
 	}
-	if err := j.sendFinish(cctx, outcome, version, errText); err != nil {
-		j.log.Error("finish", "outcome", outcome, "err", err)
+	err := j.sendFinish(cctx, outcome, version, errText)
+	if err == nil {
+		j.log.Info("finished", "outcome", outcome, "error", errText)
 		return
 	}
-	j.log.Info("finished", "outcome", outcome, "error", errText)
+	j.log.Error("finish", "outcome", outcome, "err", err)
+	if outcome == httpapi.FinishRequestOutcomeCanceled {
+		// The service request already retried as far as its context allowed;
+		// there is nothing else to report.
+		return
+	}
+	// The original ok/failed/timeout died because the cancellation canceled
+	// the work context. Do not repeat it: report canceled instead. A lost
+	// lease or a shutting-down worker (Ctrl+C) reports nothing at all.
+	if j.stale.Load() || j.serviceCtx(ctx).Err() != nil {
+		return
+	}
+	if !j.cancelRequested.Load() {
+		return
+	}
+	j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
 }
 
 // sendFinish posts one finish request.
