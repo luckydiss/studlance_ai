@@ -44,12 +44,16 @@ func (j *jobExec) prepare(ctx context.Context) error {
 			return fmt.Errorf("mkdir %s: %w", d, err)
 		}
 	}
+	// The server path -> local path mapping is loaded (and reused across
+	// continue/retry) before anything is named on disk.
+	j.names = loadLocalNames(filepath.Join(j.metaDir(), "localnames.json"))
 
 	files, err := j.w.cl.ListInput(ctx, j.asn.JobId, j.asn.Epoch)
 	if err != nil {
 		return err
 	}
 	j.inputFiles = files
+	j.assignInputNames(files)
 	for _, f := range files {
 		if err := j.downloadInput(ctx, f); err != nil {
 			return err
@@ -65,15 +69,31 @@ func (j *jobExec) prepare(ctx context.Context) error {
 	return nil
 }
 
+// assignInputNames registers every known server path (initial and revision
+// input files, plus the files of the current revision request) in the stable
+// local-name mapping before anything is downloaded.
+func (j *jobExec) assignInputNames(files []httpapi.WorkerInputFile) {
+	paths := make([]string, 0, len(files))
+	for _, f := range files {
+		paths = append(paths, f.Path)
+	}
+	if rev := j.asn.Revision; rev != nil {
+		for _, f := range rev.Files {
+			p := strings.TrimPrefix(f.Path, "input/")
+			paths = append(paths, p)
+		}
+	}
+	j.names.assignAll(paths)
+}
+
 // downloadInput fetches one input file unless the local copy already matches.
-// Server paths that are invalid on Windows get a deterministic local name.
+// Server paths that are invalid on Windows get a stable, unique local name.
 func (j *jobExec) downloadInput(ctx context.Context, f httpapi.WorkerInputFile) error {
 	rel, err := sanitizeRel(f.Path)
 	if err != nil {
 		return fmt.Errorf("input path %q: %w", f.Path, err)
 	}
-	rel = mapLocalName(rel)
-	dst := filepath.Join(j.dir, "input", filepath.FromSlash(rel))
+	dst := filepath.Join(j.dir, "input", filepath.FromSlash(j.names.local(rel)))
 	if sameFileHash(dst, f.Sha256) {
 		return nil
 	}
@@ -131,7 +151,7 @@ func (j *jobExec) writeTaskMD() error {
 			continue
 		}
 		any = true
-		fmt.Fprintf(&b, "- input/%s (%s)\n", localPath(f.Path), humanSize(f.Size))
+		fmt.Fprintf(&b, "- input/%s (%s)\n", j.localPath(f.Path), humanSize(f.Size))
 	}
 	if !any {
 		b.WriteString("—\n")
@@ -146,18 +166,21 @@ func (j *jobExec) filesLine() string {
 		if f.Revision != 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "- input/%s (%s)\n", localPath(f.Path), humanSize(f.Size))
+		fmt.Fprintf(&b, "- input/%s (%s)\n", j.localPath(f.Path), humanSize(f.Size))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// localPath maps a server-side input path to the name on disk.
-func localPath(p string) string {
+// localPath maps a server-side input path to the stable name on disk.
+func (j *jobExec) localPath(p string) string {
 	clean, err := sanitizeRel(p)
 	if err != nil {
 		return "_"
 	}
-	return mapLocalName(clean)
+	if j.names == nil {
+		return mapLocalName(clean)
+	}
+	return j.names.local(clean)
 }
 
 // ---------- state.json ----------

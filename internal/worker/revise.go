@@ -137,11 +137,7 @@ func (j *jobExec) revisionMD(rev *httpapi.AssignmentRevision, cropped map[int]bo
 		b.WriteString("—\n")
 	}
 	for _, f := range rev.Files {
-		p := f.Path
-		if !strings.HasPrefix(p, "input/") {
-			p = "input/" + p
-		}
-		fmt.Fprintf(&b, "- %s\n", p)
+		fmt.Fprintf(&b, "- input/%s\n", j.localPath(strings.TrimPrefix(f.Path, "input/")))
 	}
 	return b.String()
 }

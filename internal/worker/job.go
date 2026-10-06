@@ -42,6 +42,7 @@ type jobExec struct {
 
 	stage       string // current stage (draft|verify|revise)
 	inputFiles  []httpapi.WorkerInputFile
+	names       *localNames // server path -> unique local path
 	state       localState
 	agentCancel context.CancelFunc // cancels the agent's stage context
 
