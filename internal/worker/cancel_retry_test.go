@@ -86,6 +86,21 @@ func (r *retryRecorder) attempt(key string) int {
 	return r.attempts[key]
 }
 
+// failFinish makes the first attempt of a finish outcome answer 500. It is
+// mutex-protected like the handler's read, so tests never race with a request.
+func (r *retryRecorder) failFinish(outcome string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failFirstFinish[outcome] = true
+}
+
+// setPutDrop sets how many first snapshot-file PUTs are dropped.
+func (r *retryRecorder) setPutDrop(n int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.putDrop = n
+}
+
 func (r *retryRecorder) finishOutcomes() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -135,10 +150,14 @@ func (r *retryRecorder) handler() http.Handler {
 			}
 			w.WriteHeader(http.StatusNoContent)
 		case strings.Contains(p, "/snapshot/") && strings.HasSuffix(p, "/files"):
-			if n := r.bump("put"); n == 1 {
+			n := r.bump("put")
+			if n == 1 {
 				close(r.putStarted)
 			}
-			if n := r.attempt("put"); n <= r.putDrop {
+			r.mu.Lock()
+			drop := r.putDrop
+			r.mu.Unlock()
+			if n <= drop {
 				// A broken connection: the client sees a network error.
 				if hj, ok := w.(http.Hijacker); ok {
 					conn, _, err := hj.Hijack()
@@ -292,7 +311,7 @@ func TestCancelStopsCommitRetry(t *testing.T) {
 func TestCancelStopsFinishOkRetry(t *testing.T) {
 	const heartbeat = 20 * time.Millisecond
 	rec := newRetryRecorder(t)
-	rec.failFirstFinish["ok"] = true
+	rec.failFinish("ok")
 	cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: heartbeat.String()}}
 	j, ctx, _ := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
 
@@ -359,7 +378,7 @@ func TestCancelStopsUploadRetryOnNetworkError(t *testing.T) {
 
 	const heartbeat = time.Millisecond
 	rec := newRetryRecorder(t)
-	rec.putDrop = 1
+	rec.setPutDrop(1)
 	cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: heartbeat.String()}}
 	j, ctx, _ := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
 
@@ -397,7 +416,7 @@ func TestCancelTurnsTerminalFinishIntoCanceled(t *testing.T) {
 		t.Run(outcome, func(t *testing.T) {
 			const heartbeat = 20 * time.Millisecond
 			rec := newRetryRecorder(t)
-			rec.failFirstFinish[outcome] = true
+			rec.failFinish(outcome)
 			cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: heartbeat.String()}}
 			j, ctx, _ := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
 
@@ -429,13 +448,17 @@ func TestCancelTurnsTerminalFinishIntoCanceled(t *testing.T) {
 // Пункт 2 (4-й раунд): служебный finish canceled сохраняет повторы при
 // сетевых сбоях — первый canceled получает 500 и повторяется успешно.
 func TestCanceledFinishRetriesOnServiceContext(t *testing.T) {
-	const heartbeat = 20 * time.Millisecond
 	rec := newRetryRecorder(t)
-	rec.failFirstFinish["canceled"] = true
-	cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: heartbeat.String()}}
-	j, ctx, _ := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
-	// No cancellation is involved here: retry immediately instead of waiting
-	// for a flag that never appears.
+	rec.failFinish("canceled")
+	// No cancellation is involved, so no heartbeat is needed: the client is
+	// built with an immediate backoff and installed before any goroutine runs.
+	cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: "20ms"}}
+	j := retryJob(t, rec, cfg, "out/чертёж.cdw")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	workCtx, workCancel := context.WithCancel(ctx)
+	defer workCancel()
+	j.jobCtx, j.workCtx, j.workCancel = ctx, workCtx, workCancel
 	j.w.cl = client.NewForTest(rec.srv.URL, "tok", func(context.Context, time.Duration) error { return nil })
 
 	j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
@@ -453,7 +476,7 @@ func TestCanceledFinishRetriesOnServiceContext(t *testing.T) {
 func TestStaleLeaseStopsTerminalFinishRetry(t *testing.T) {
 	const heartbeat = 20 * time.Millisecond
 	rec := newRetryRecorder(t)
-	rec.failFirstFinish["failed"] = true
+	rec.failFinish("failed")
 	cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: heartbeat.String()}}
 	j, ctx, _ := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
 
@@ -483,7 +506,7 @@ func TestStaleLeaseStopsTerminalFinishRetry(t *testing.T) {
 func TestCtrlCStopsTerminalFinishRetry(t *testing.T) {
 	const heartbeat = 20 * time.Millisecond
 	rec := newRetryRecorder(t)
-	rec.failFirstFinish["timeout"] = true
+	rec.failFinish("timeout")
 	cfg := config.Worker{Timeouts: config.WorkerTimeouts{Heartbeat: heartbeat.String()}}
 	j, ctx, cancelJob := cancellableJob(t, rec, cfg, heartbeat, "out/чертёж.cdw")
 
