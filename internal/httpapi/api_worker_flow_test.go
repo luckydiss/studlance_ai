@@ -348,6 +348,17 @@ func TestWorkerRevisionCropSeparateFromInput(t *testing.T) {
 		cookie := h.seedUserHTTP("c@local", "pw", store.RoleClient)
 		jobID := h.submitJob(cookie, "Реферат по истории")
 		asn := revisionCropJob(t, h, wtoken, cookie, jobID, attachment)
+		// The attachment named remarks/1.png is an ordinary client input and
+		// must reach the worker as such, not be hidden as a crop namespace.
+		foundAttachment := false
+		for _, f := range asn.Revision.Files {
+			if f.Path == "revision-2/remarks/1.png" {
+				foundAttachment = true
+			}
+		}
+		if !foundAttachment {
+			t.Fatalf("attachment missing from assignment files: %+v", asn.Revision.Files)
+		}
 
 		inputKey := "jobs/" + jobID + "/input/revision-2/remarks/1.png"
 		cropKey := "jobs/" + jobID + "/revision-crops/2/1.png"
