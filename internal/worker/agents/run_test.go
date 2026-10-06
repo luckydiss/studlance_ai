@@ -1,9 +1,11 @@
 package agents
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,6 +41,9 @@ func heapAlloc() uint64 {
 //     HELPER_LINE_BYTES (default 900 KiB) of 'x' in aggregated_output each,
 //     then HELPER_MARKER, then HELPER_TAIL_LINES small agent_message items,
 //     exit HELPER_EXIT.
+//   - "manyevents": thread.started, HELPER_LINES (default 1,000,000) tiny
+//     agent_message items, HELPER_MARKER, then HELPER_TAIL_LINES small tail
+//     items, exit HELPER_EXIT.
 //   - "parentexit": parent starts a grandchild that inherits stdout/stderr
 //     (HELPER_GRANDCHILD_SLEEP_MS, default 120 s), records its pid in
 //     HELPER_GRANDCHILD_PID_FILE, writes two agent_message items and exits
@@ -76,6 +81,28 @@ func TestHelperProcess(t *testing.T) {
 			_ = os.WriteFile(marker, []byte("done"), 0o644)
 		}
 		fmt.Println(`{"type":"item.completed","item":{"id":"m2","type":"agent_message","text":"parent last line"}}`)
+		os.Exit(exitCode)
+	}
+
+	if os.Getenv("HELPER_MODE") == "manyevents" {
+		n, _ := strconv.Atoi(os.Getenv("HELPER_LINES"))
+		if n <= 0 {
+			n = 1000000
+		}
+		tail, _ := strconv.Atoi(os.Getenv("HELPER_TAIL_LINES"))
+		out := bufio.NewWriterSize(os.Stdout, 1<<20)
+		fmt.Fprintln(out, `{"type":"thread.started","thread_id":"helper-thread-many"}`)
+		const tiny = `{"type":"item.completed","item":{"id":"i","type":"agent_message","text":"x"}}`
+		for i := 0; i < n; i++ {
+			fmt.Fprintln(out, tiny)
+		}
+		_ = out.Flush()
+		if marker := os.Getenv("HELPER_MARKER"); marker != "" {
+			_ = os.WriteFile(marker, []byte("done"), 0o644)
+		}
+		for i := 1; i <= tail; i++ {
+			fmt.Printf(`{"type":"item.completed","item":{"id":"tail_%d","type":"agent_message","text":"after many %d"}}`+"\n", i, i)
+		}
 		os.Exit(exitCode)
 	}
 
@@ -498,7 +525,8 @@ func TestRunSendErrorKills(t *testing.T) {
 // пачки — пока Send не вернулся, байты пачки всё ещё заняты.
 func TestStepQueueCountsInFlightBatch(t *testing.T) {
 	old := maxQueueBytes
-	maxQueueBytes = 3 * 1024
+	// Three 1024-byte summaries cost 3 * (stepOverheadBytes + 1024) bytes.
+	maxQueueBytes = 4096
 	t.Cleanup(func() { maxQueueBytes = old })
 
 	q := newStepQueue()
@@ -638,7 +666,6 @@ func TestRunNetworkDownBigTrace(t *testing.T) {
 	if !strings.Contains(string(raw), `"cmd `+strconv.Itoa(lines)+`"`) {
 		t.Fatalf("raw log is missing the last big event")
 	}
-	raw = nil
 
 	// Memory during the outage stays bounded: the whole historical trace
 	// (40 x 900 KiB) must not be retained.
@@ -661,5 +688,107 @@ func TestRunNetworkDownBigTrace(t *testing.T) {
 	wantLast := lines + tailLines
 	if got[len(got)-1] != wantLast {
 		t.Fatalf("last Seq = %d, want %d (tail steps must arrive)", got[len(got)-1], wantLast)
+	}
+}
+
+// lastBytes returns the last n bytes of a file.
+func lastBytes(t *testing.T, path string, n int) string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() < int64(n) {
+		n = int(fi.Size())
+	}
+	buf := make([]byte, n)
+	if _, err := f.ReadAt(buf, fi.Size()-int64(n)); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
+	return string(buf)
+}
+
+// Пункт 3 (третий раунд): миллион коротких событий не удерживает
+// неограниченную память. Учёт каждого шага включает фиксированную стоимость,
+// поэтому очередь упирается в конечный предел и отбрасывает лишнее; сырой лог
+// остаётся полным, после отправки память освобождается.
+func TestRunShortEventsMemoryBounded(t *testing.T) {
+	fastFlush(t, 50*time.Millisecond, 500)
+	const events = 1_000_000
+	marker := filepath.Join(t.TempDir(), "produced")
+	spec := helperSpec(t,
+		"HELPER_MODE=manyevents",
+		"HELPER_LINES="+strconv.Itoa(events),
+		"HELPER_TAIL_LINES=3",
+		"HELPER_MARKER="+marker,
+		"HELPER_EXIT=0",
+	)
+
+	before := heapAlloc()
+	var during uint64
+	var first sync.Once
+	var mu sync.Mutex
+	got := 0
+	spec.Send = func(steps []NewStep) error {
+		blocked := false
+		first.Do(func() { blocked = true })
+		if blocked {
+			// Nothing is sent while the helper produces the stream, so the
+			// queue reaches its finite limit.
+			deadline := time.Now().Add(300 * time.Second)
+			for {
+				if _, err := os.Stat(marker); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Error("helper did not finish producing events")
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			during = heapAlloc()
+		}
+		mu.Lock()
+		got += len(steps)
+		mu.Unlock()
+		return nil
+	}
+
+	res, err := Run(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0", res.ExitCode)
+	}
+
+	// The raw log keeps the whole stream, including the tail.
+	info, err := os.Stat(spec.LogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() < int64(events*60) {
+		t.Fatalf("raw log = %d bytes, want the full %d-event stream", info.Size(), events)
+	}
+	if tail := lastBytes(t, spec.LogPath, 4096); !strings.Contains(tail, "after many 3") {
+		t.Fatalf("raw log is missing the last event: %q", tail)
+	}
+
+	// The old one-byte-per-step accounting held the whole stream (~100 MiB).
+	if delta := int64(during) - int64(before); delta > 64<<20 {
+		t.Fatalf("heap grew by %d bytes with %d short events, want < 64 MiB", delta, events)
+	}
+	// The finite step limit dropped the excess.
+	if got == 0 || got >= events/2 {
+		t.Fatalf("accepted steps = %d, want a bounded subset of %d", got, events)
+	}
+	// Sent structures are released again after the run.
+	if delta := int64(heapAlloc()) - int64(before); delta > 48<<20 {
+		t.Fatalf("heap still holds %d bytes after the run, want < 48 MiB", delta)
 	}
 }

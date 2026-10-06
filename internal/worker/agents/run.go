@@ -76,13 +76,33 @@ var (
 	flushBatchSize = 50
 )
 
-// maxQueueBytes caps the memory of the trace pipeline (approximated as
-// summary length plus payload JSON length). The limit covers the queued steps
-// AND the batch currently being sent together, so a stuck network cannot hold
-// twice the cap. Steps parsed past the cap are dropped: they stay only in the
-// raw log, but their Seq numbers are still consumed so the gaps are visible
-// on the server. Package-level so tests can shrink it.
+// maxQueueBytes caps the memory of the trace pipeline. The estimate charges
+// every step a conservative fixed cost (see stepSize), so it covers the
+// held NewStep structs, the slice capacities, the payload containers and the
+// summary bytes. The limit covers the queued steps AND the batch currently
+// being sent together, so a stuck network cannot hold twice the cap. Steps
+// parsed past the cap are dropped: they stay only in the raw log, but their
+// Seq numbers are still consumed so the gaps are visible on the server.
+// Package-level so tests can shrink it.
 var maxQueueBytes = 50 << 20 // 50 MiB
+
+// maxQueueSteps bounds the number of steps held in the queue and in flight,
+// independently of the byte budget: a stream of tiny steps must not create an
+// unbounded slice. Package-level so tests can shrink it.
+var maxQueueSteps = maxQueueBytes / stepOverheadBytes
+
+// stepOverheadBytes is the conservative fixed cost of one queued step: the
+// NewStep struct itself plus its slots in the steps/sizes slices (including
+// slice growth), the string headers and the map header.
+const stepOverheadBytes = 256
+
+// payloadEntryBytes is the per-entry cost of a payload container: the map or
+// slice element, the interface header and the allocator rounding. It is
+// charged for keys and elements as well.
+const payloadEntryBytes = 64
+
+// payloadScalarBytes is the cost of one non-string scalar payload value.
+const payloadScalarBytes = 24
 
 // killWaitTimeout bounds how long Run waits for the process to exit after a
 // kill before closing its pipes. Package-level so tests can shrink it.
@@ -390,39 +410,95 @@ func readLines(r *bufio.Reader, fn func(line []byte)) {
 }
 
 // stepQueue is the in-memory buffer between the parsing reader and the Send
-// goroutine. Its byte budget covers the queued steps and the batch currently
-// in flight together: bytes stay accounted for until Send returns.
+// goroutine. Its budget covers the queued steps and the batch currently in
+// flight together: bytes and the step count stay accounted for until Send
+// returns.
 type stepQueue struct {
-	mu     sync.Mutex
-	signal chan struct{} // buffered 1: the batch is full or the queue closed
-	steps  []NewStep
-	sizes  []int
-	bytes  int
-	closed bool
-	logged bool // the overflow loss was already logged
+	mu       sync.Mutex
+	signal   chan struct{} // buffered 1: the batch is full or the queue closed
+	steps    []NewStep
+	sizes    []int
+	bytes    int
+	inFlight int // steps taken by take and not released yet
+	closed   bool
+	logged   bool // the overflow loss was already logged
 }
 
 func newStepQueue() *stepQueue {
 	return &stepQueue{signal: make(chan struct{}, 1)}
 }
 
-// stepSize estimates the heap a queued step holds.
+// stepSize conservatively estimates the memory a queued step keeps alive: a
+// fixed per-step cost (the struct, its slice slots, growth and headers), the
+// summary bytes and a recursive payload estimate. The serialized JSON size is
+// deliberately not used as the estimate: it misses the containers, their
+// capacities and the keys, and under-counts tiny steps badly.
 func stepSize(s NewStep) int {
-	return len(s.Summary) + len(payloadJSON(s.Payload))
+	return stepOverheadBytes + len(s.Summary) + payloadSize(s.Payload)
 }
 
-// push appends a step unless the queue plus the in-flight batch is over
-// maxQueueBytes; the loss is logged once to the runner's stderr (dropped
-// steps stay in the raw log, their Seq numbers are still consumed).
+// payloadSize estimates one payload value, charging every container entry and
+// every key. Unknown types get a conservative fixed cost.
+func payloadSize(v interface{}) int {
+	switch t := v.(type) {
+	case nil:
+		return 0
+	case string:
+		return len(t) + payloadEntryBytes
+	case []string:
+		if t == nil {
+			return 0
+		}
+		size := payloadEntryBytes
+		for _, e := range t {
+			size += len(e) + payloadEntryBytes
+		}
+		return size
+	case []interface{}:
+		if t == nil {
+			return 0
+		}
+		size := payloadEntryBytes
+		for _, e := range t {
+			size += payloadSize(e)
+		}
+		return size
+	case []map[string]interface{}:
+		if t == nil {
+			return 0
+		}
+		size := payloadEntryBytes
+		for _, e := range t {
+			size += payloadSize(e)
+		}
+		return size
+	case map[string]interface{}:
+		if t == nil {
+			return 0
+		}
+		size := payloadEntryBytes
+		for k, e := range t {
+			size += len(k) + payloadEntryBytes + payloadSize(e)
+		}
+		return size
+	default:
+		return payloadScalarBytes + payloadEntryBytes
+	}
+}
+
+// push appends a step unless the queue plus the in-flight batch is over the
+// byte budget or the step limit; the loss is logged once to the runner's
+// stderr (dropped steps stay in the raw log, their Seq numbers are still
+// consumed).
 func (q *stepQueue) push(s NewStep) {
 	size := stepSize(s)
 	q.mu.Lock()
-	if q.bytes+size > maxQueueBytes {
+	if q.bytes+size > maxQueueBytes || len(q.steps)+q.inFlight+1 > maxQueueSteps {
 		if !q.logged {
 			q.logged = true
 			_, _ = fmt.Fprintf(os.Stderr,
-				"agents: send queue over %d bytes, dropping steps (they stay in the raw log; Seq gaps are expected)\n",
-				maxQueueBytes)
+				"agents: send queue over %d bytes or %d steps, dropping steps (they stay in the raw log; Seq gaps are expected)\n",
+				maxQueueBytes, maxQueueSteps)
 		}
 		q.mu.Unlock()
 		return
@@ -438,18 +514,19 @@ func (q *stepQueue) push(s NewStep) {
 }
 
 // take returns and removes all pending steps with their sizes; closed reports
-// whether the reader is done and no more steps will come. The bytes remain
+// whether the reader is done and no more steps will come. The budget stays
 // accounted for until release, so the caller must release the batch.
 func (q *stepQueue) take() (batch []NewStep, sizes []int, closed bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	batch, sizes = q.steps, q.sizes
 	q.steps, q.sizes = nil, nil
+	q.inFlight += len(batch)
 	return batch, sizes, q.closed
 }
 
-// release frees the byte accounting of a batch returned by take; it is called
-// once Send has returned (successfully or not), when the batch is garbage.
+// release frees the budget of a batch returned by take; it is called once
+// Send has returned (successfully or not), when the batch is garbage.
 func (q *stepQueue) release(sizes []int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -458,6 +535,10 @@ func (q *stepQueue) release(sizes []int) {
 	}
 	if q.bytes < 0 {
 		q.bytes = 0
+	}
+	q.inFlight -= len(sizes)
+	if q.inFlight < 0 {
+		q.inFlight = 0
 	}
 }
 
@@ -502,18 +583,6 @@ func (q *stepQueue) sendLoop(send func([]NewStep) error) error {
 		case <-ticker.C:
 		}
 	}
-}
-
-// payloadJSON sizes a payload for the queue memory estimate.
-func payloadJSON(payload map[string]interface{}) []byte {
-	if payload == nil {
-		return nil
-	}
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return nil
-	}
-	return b
 }
 
 // truncateJSONLine compacts an over-long stdout line for the parser: the
