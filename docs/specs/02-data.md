@@ -190,13 +190,15 @@ CREATE TABLE job_notes (
 ```
 jobs/<job_id>/input/<path>                       исходные файлы
 jobs/<job_id>/input/revision-<n>/<path>          файлы, приложенные к доработке n
+jobs/<job_id>/revision-crops/<n>/<idx>.png       вырезки выделенных мест (kind=crop)
 jobs/<job_id>/draft/out/<path>                   снимок черновика (после codex)
 jobs/<job_id>/v<n>/out/<path>                    комплект версии n
 jobs/<job_id>/<draft|v<n>>/pages/<document_idx>/<page>.png
 jobs/<job_id>/<draft|v<n>>/thumbs/<document_idx>/<page>.png
-jobs/<job_id>/input/revision-<n>/remarks/<idx>.png   вырезки выделенных мест
 jobs/<job_id>/logs/<agent_run_id>.jsonl          сырой лог агента
 jobs/<job_id>/v<n>/bundle.zip                    архив версии (создаётся при первом запросе, кешируется)
 ```
+
+Вырезки доработки живут в своём пространстве имён и не пересекаются с входными файлами клиента: запись `files` имеет `kind = crop`, `version = n`, `path = revision-crops/<n>/<idx>.png`, blob `jobs/<job_id>/revision-crops/<n>/<idx>.png`. Клиент может приложить файл с любым допустимым именем, в том числе `remarks/<idx>.png` — он остаётся обычным `input`-файлом (`input/revision-<n>/remarks/<idx>.png`, blob `jobs/<job_id>/input/...`), поэтому загрузка вырезки не перезаписывает вложение, а откат ошибочной регистрации не удаляет входной blob.
 
 Пути файлов клиента нормализуются: разделитель `/`, без `..`, без ведущего `/`, без управляющих символов, имя ≤ 255 байт, путь ≤ 1024 байт. Повторный путь в заказе — заменяет файл.

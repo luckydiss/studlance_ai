@@ -139,6 +139,8 @@ stateDiagram-v2
 C:\studlance\jobs\<job_id>\
 ├─ input\             файлы клиента (как загружены, с относительными путями)
 │  └─ revision-2\     файлы, приложенные к доработке (если были)
+├─ revision-crops\    вырезки замечаний по доработкам (создаёт воркер)
+│  └─ 2\              <idx>.png — вырезка замечания; вне input\, чтобы не путаться с вложениями клиента
 ├─ TASK.md            запрос клиента + перечень прикреплённых файлов
 ├─ REVISION-2.md      замечания клиента к версии 1 (по одному файлу на доработку)
 ├─ out\               готовый комплект: .docx .xlsx .cdw/.frw .pdf .png …
@@ -187,7 +189,7 @@ C:\studlance\jobs\<job_id>\
 > В `input/` — задание и методические требования, в `out/` — черновик работы. Проверь всё: ничего не выдумано (данные, расчёты, источники), всё соответствует заданию и методичке, графики, чертежи и схемы корректны, оформление по требованиям. Исправь всё, что считаешь нужным, и доведи работу до финала. Обнови PDF в `preview/` и `manifest.json` под финальный комплект. Опиши проверку в `VERIFICATION.md` и итог в `verification.json`. Если без клиента не обойтись — вопрос ему простым языком в `QUESTIONS.md` и остановись.
 
 **claude, этап `revise`:**
-> Клиент посмотрел версию N и просит доработать: `REVISION-<N+1>.md` — замечания с привязкой к месту (документ, страница, где на листе) и вырезки этих мест в `input/revision-<N+1>/remarks/`; плюс файлы клиента, если он их приложил. Внеси правки в `out/`, проверь, что ничего не сломалось и работа по-прежнему соответствует требованиям. Обнови `VERIFICATION.md` и `verification.json`.
+> Клиент посмотрел версию N и просит доработать: `REVISION-<N+1>.md` — замечания с привязкой к месту (документ, страница, где на листе) и вырезки этих мест в `revision-crops/<N+1>/`; плюс файлы клиента, если он их приложил (они в `input/revision-<N+1>/`). Внеси правки в `out/`, проверь, что ничего не сломалось и работа по-прежнему соответствует требованиям. Обнови `VERIFICATION.md` и `verification.json`.
 
 Промпты — шаблоны в `prompts/`, версия шаблонов записывается в заказ.
 
@@ -343,7 +345,7 @@ RETURNING *;
 | `agent_runs` | `id, job_id, version, agent (codex/claude), stage, session_id, started_at, finished_at, exit_code, input_tokens, output_tokens, cost, raw_log_key` |
 | `trace_steps` | `agent_run_id, seq, ts, type, summary, payload jsonb` — PK `(agent_run_id, seq)` |
 | `events` | `id, job_id, ts, kind (status/question/answer/revision/verification/error), visible_to_client, data jsonb` |
-| `files` | `id, job_id, kind (input/draft/version/log), version, path, storage_key, size, sha256, created_at` |
+| `files` | `id, job_id, kind (input/draft/version/log/page/thumb/crop), version, path, storage_key, size, sha256, created_at` |
 
 `state jsonb` у заказа: `codex_thread_id`, `claude_session_id`, `pending_answer`, версия промптов.
 Название заказа — первые слова запроса, после черновика заменяется названием из `SUMMARY.md`.
@@ -355,6 +357,7 @@ RETURNING *;
 ```
 jobs/<job_id>/input/<path>
 jobs/<job_id>/input/revision-<n>/<path>
+jobs/<job_id>/revision-crops/<n>/<idx>.png
 jobs/<job_id>/draft/<path>
 jobs/<job_id>/v<n>/<path>
 jobs/<job_id>/v<n>/pages/<document>/<page>.png   (+ мини-копии)
