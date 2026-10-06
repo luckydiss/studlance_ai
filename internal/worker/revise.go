@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -16,8 +17,14 @@ import (
 
 // prepareRevision builds the rework package before a revise stage
 // (05-worker.md «Подготовка доработки»): remark crops cut from the previous
-// version's pages, uploaded and referenced from REVISION-<n>.md. Idempotent:
-// a fully prepared revision (REVISION-<n>.md exists) is not rebuilt.
+// version's pages, uploaded and referenced from REVISION-<n>.md.
+//
+// It is idempotent and self-healing: the crops are checked on disk, and a
+// missing, empty or truncated crop is rebuilt from the previous snapshot
+// again. REVISION-<n>.md is written atomically and references exactly the
+// crops that exist, so a continue/answer after an interrupted preparation
+// never leaves a link to a file that is not there. Uploads are idempotent
+// (same bytes, same key).
 func (j *jobExec) prepareRevision(ctx context.Context) error {
 	rev := j.asn.Revision
 	if rev == nil {
@@ -25,9 +32,6 @@ func (j *jobExec) prepareRevision(ctx context.Context) error {
 	}
 	n := rev.Version
 	mdPath := filepath.Join(j.dir, fmt.Sprintf("REVISION-%d.md", n))
-	if _, err := os.Stat(mdPath); err == nil {
-		return nil // already prepared (e.g. continue after a crash mid-stage)
-	}
 
 	remarksDir := filepath.Join(j.dir, "input", fmt.Sprintf("revision-%d", n), "remarks")
 	if err := os.MkdirAll(remarksDir, 0o755); err != nil {
@@ -38,23 +42,86 @@ func (j *jobExec) prepareRevision(ctx context.Context) error {
 
 	cropped := map[int]bool{}
 	for _, r := range rev.Remarks {
-		cropPath, err := j.cropRemark(prevDir, prevInfo, remarksDir, n, r)
-		if err != nil {
-			// A missing page image must not fail the stage: the remark text
-			// and coordinates still reach the agent.
-			j.log.Error("remark crop skipped", "idx", r.Idx, "err", err)
+		if j.cancelRequested.Load() {
+			return errCanceled
+		}
+		cropPath := remarkCropPath(remarksDir, r.Idx)
+		if !validCrop(cropPath) {
+			// Missing, empty or broken: rebuild it from the previous
+			// snapshot's page image.
+			built, err := j.cropRemark(prevDir, prevInfo, remarksDir, n, r)
+			if err != nil {
+				// A missing page image must not fail the stage: the remark
+				// text and coordinates still reach the agent. The stale crop
+				// is dropped so the Markdown never points at a file that is
+				// not there.
+				j.log.Error("remark crop skipped", "idx", r.Idx, "err", err)
+				_ = os.Remove(cropPath)
+				continue
+			}
+			cropPath = built
+		}
+		if !validCrop(cropPath) {
+			_ = os.Remove(cropPath)
 			continue
 		}
 		cropped[r.Idx] = true
 		if err := j.uploadCrop(ctx, n, r.Idx, cropPath); err != nil {
-			if isStale(err) {
+			if isStale(err) || errors.Is(err, errCanceled) {
 				return err
 			}
 			j.log.Error("remark crop upload", "idx", r.Idx, "err", err)
 		}
 	}
+	if j.cancelRequested.Load() {
+		return errCanceled
+	}
+	return writeFileAtomic(mdPath, []byte(j.revisionMD(rev, cropped)))
+}
 
-	return os.WriteFile(mdPath, []byte(j.revisionMD(rev, cropped)), 0o644)
+// remarkCropPath is the local path of a remark crop.
+func remarkCropPath(remarksDir string, idx int) string {
+	return filepath.Join(remarksDir, fmt.Sprintf("%d.png", idx))
+}
+
+// validCrop reports whether the file is a decodable PNG: an empty or
+// truncated file left by an interrupted preparation is not.
+func validCrop(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	if fi, err := f.Stat(); err != nil || fi.Size() == 0 {
+		return false
+	}
+	_, err = png.Decode(f)
+	return err == nil
+}
+
+// writeFileAtomic writes data to path through a temporary file in the same
+// directory and a rename, so a reader never sees a half-written file.
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	return nil
 }
 
 // cropRemark cuts the remark area (plus a 3 % margin, clamped to the page)
@@ -91,13 +158,25 @@ func (j *jobExec) cropRemark(prevDir string, prevInfo snapshotInfo, remarksDir s
 	if !ok {
 		return "", fmt.Errorf("картинка не поддерживает вырезку")
 	}
-	dst := filepath.Join(remarksDir, fmt.Sprintf("%d.png", r.Idx))
-	out, err := os.Create(dst)
+	dst := remarkCropPath(remarksDir, r.Idx)
+	// Write through a temporary file: an interrupted crop never overwrites a
+	// good one with a truncated PNG.
+	tmp, err := os.CreateTemp(remarksDir, ".crop-*")
 	if err != nil {
 		return "", err
 	}
-	defer func() { _ = out.Close() }()
-	if err := png.Encode(out, sub.SubImage(rect)); err != nil {
+	tmpName := tmp.Name()
+	if err := png.Encode(tmp, sub.SubImage(rect)); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return "", err
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		_ = os.Remove(tmpName)
 		return "", err
 	}
 	return dst, nil
