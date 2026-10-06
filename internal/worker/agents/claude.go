@@ -128,18 +128,29 @@ func (p *claudeParser) assistant(e claudeEvent, ts time.Time) {
 	}
 }
 
-// toolUse maps a tool_use block to a step by tool name.
+// toolUse maps a tool_use block to a step by tool name. The block id is
+// preserved as payload.tool_use_id on the step itself, so the later
+// tool_result can be matched to the call without mutating the sent step.
 func (p *claudeParser) toolUse(b claudeBlock, ts time.Time) Step {
 	step := Step{Ts: ts}
 	var input claudeInput
 	if b.Input != nil {
 		input = *b.Input
 	}
+	payload := func(kv map[string]interface{}) map[string]interface{} {
+		if kv == nil {
+			kv = make(map[string]interface{})
+		}
+		if b.ID != "" {
+			kv["tool_use_id"] = b.ID
+		}
+		return kv
+	}
 	switch b.Name {
 	case "Bash":
 		step.Type = "command"
 		step.Summary = headRunes(input.Command, summaryRunes)
-		step.Payload = map[string]interface{}{"command": input.Command}
+		step.Payload = payload(map[string]interface{}{"command": input.Command})
 	case "Write", "Edit", "MultiEdit", "NotebookEdit":
 		path := input.FilePath
 		if path == "" {
@@ -147,16 +158,19 @@ func (p *claudeParser) toolUse(b claudeBlock, ts time.Time) Step {
 		}
 		step.Type = "file"
 		step.Summary = headRunes(path, summaryRunes)
-		step.Payload = map[string]interface{}{"path": path}
+		step.Payload = payload(map[string]interface{}{"path": path})
 	case "WebSearch":
 		step.Type = "web"
 		step.Summary = headRunes(input.Query, summaryRunes)
+		step.Payload = payload(nil)
 	case "WebFetch":
 		step.Type = "web"
 		step.Summary = headRunes(input.URL, summaryRunes)
+		step.Payload = payload(nil)
 	default:
 		step.Type = "tool"
 		step.Summary = headRunes(b.Name, summaryRunes)
+		step.Payload = payload(nil)
 	}
 	return step
 }

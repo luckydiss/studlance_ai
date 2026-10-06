@@ -360,3 +360,84 @@ func TestClaudeRealBadSession(t *testing.T) {
 		t.Fatalf("Failed = %v %q", failed, msg)
 	}
 }
+
+// Пункт 6 (второй раунд): результат однозначно связан с вызовом. Два
+// одинаковых вызова с разными id, результат приходит после отправки вызова,
+// результаты — в обратном порядке.
+func TestClaudeToolResultLinksByID(t *testing.T) {
+	const callLine = `{"type":"assistant","message":{"role":"assistant","content":[` +
+		`{"type":"tool_use","id":"toolu_A","name":"Bash","input":{"command":"echo hi"}},` +
+		`{"type":"tool_use","id":"toolu_B","name":"Bash","input":{"command":"echo hi"}},` +
+		`{"type":"tool_use","id":"toolu_W","name":"WebSearch","input":{"query":"beam"}},` +
+		`{"type":"tool_use","id":"toolu_F","name":"Write","input":{"file_path":"out/a.txt"}},` +
+		`{"type":"tool_use","id":"toolu_X","name":"mcp__custom","input":{}}]}}`
+	const resultLine = `{"type":"user","message":{"role":"user","content":[` +
+		`{"type":"tool_result","tool_use_id":"toolu_B","content":"result B"},` +
+		`{"type":"tool_result","tool_use_id":"toolu_A","content":"result A"}]}}`
+
+	ts := time.Now()
+	p := NewClaudeParser("")
+	p.Feed([]byte(callLine), ts)
+
+	// The calls were drained (i.e. already handed to the runner) before the
+	// results arrive.
+	calls := p.Drain()
+	if len(calls) != 5 {
+		t.Fatalf("call steps = %d, want 5", len(calls))
+	}
+	wantIDs := []string{"toolu_A", "toolu_B", "toolu_W", "toolu_F", "toolu_X"}
+	for i, want := range wantIDs {
+		if got := calls[i].Payload["tool_use_id"]; got != want {
+			t.Fatalf("call %d (%s) tool_use_id = %v, want %q", i, calls[i].Type, got, want)
+		}
+	}
+	// The non-Bash tools keep the id even without other payload fields.
+	if got := calls[2].Payload["tool_use_id"]; got != "toolu_W" {
+		t.Fatalf("web call tool_use_id = %v", got)
+	}
+	if got := calls[3].Payload["tool_use_id"]; got != "toolu_F" {
+		t.Fatalf("file call tool_use_id = %v", got)
+	}
+
+	p.Feed([]byte(resultLine), ts)
+	results := p.Drain()
+	if len(results) != 2 {
+		t.Fatalf("result steps = %d, want 2", len(results))
+	}
+	// Reverse order: B then A.
+	if got := results[0].Payload["tool_use_id"]; got != "toolu_B" {
+		t.Fatalf("first result tool_use_id = %v, want toolu_B", got)
+	}
+	if got := results[1].Payload["tool_use_id"]; got != "toolu_A" {
+		t.Fatalf("second result tool_use_id = %v, want toolu_A", got)
+	}
+	if got := results[0].Payload["result"]; got != "result B" {
+		t.Fatalf("first result text = %v, want result B", got)
+	}
+	if got := results[1].Payload["result"]; got != "result A" {
+		t.Fatalf("second result text = %v, want result A", got)
+	}
+
+	// Each result is linked to its own call: the id resolves to exactly one
+	// call and the text matches that call's order.
+	byID := map[string]Step{}
+	for _, c := range calls {
+		byID[c.Payload["tool_use_id"].(string)] = c
+	}
+	for _, r := range results {
+		id, _ := r.Payload["tool_use_id"].(string)
+		call, ok := byID[id]
+		if !ok {
+			t.Fatalf("result %v has no call", id)
+		}
+		if call.Type != "command" {
+			t.Fatalf("result %v linked to a %s step, want command", id, call.Type)
+		}
+	}
+	if byID["toolu_A"].Payload["result"] != nil || byID["toolu_B"].Payload["result"] != nil {
+		t.Fatal("a sent call step was mutated by the later tool_result")
+	}
+	if len(byID["toolu_A"].Payload) != 2 {
+		t.Fatalf("call payload changed: %v", byID["toolu_A"].Payload)
+	}
+}
