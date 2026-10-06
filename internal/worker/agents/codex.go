@@ -163,6 +163,13 @@ func (p *codexParser) fail(msg string) {
 	}
 }
 
+// Drain implements Parser: it hands the parsed steps over and forgets them.
+func (p *codexParser) Drain() []Step {
+	steps := p.steps
+	p.steps = nil
+	return steps
+}
+
 // Steps implements Parser.
 func (p *codexParser) Steps() []Step { return p.steps }
 

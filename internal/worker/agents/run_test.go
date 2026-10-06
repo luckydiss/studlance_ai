@@ -6,12 +6,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+// heapAlloc returns the live heap after a collection.
+func heapAlloc() uint64 {
+	runtime.GC()
+	runtime.GC()
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	return ms.HeapAlloc
+}
 
 // TestHelperProcess is not a test; it is the child process Run launches. It
 // emits codex-shaped JSONL and understands two modes (HELPER_MODE):
@@ -24,11 +34,39 @@ import (
 //   - "longline": thread.started, one command_execution item whose
 //     aggregated_output is HELPER_LONG_BYTES of 'x' (default 10 MiB), then
 //     two agent_message items, exit HELPER_EXIT.
+//   - "bigoutput": thread.started, HELPER_LINES command_execution items with
+//     HELPER_LINE_BYTES (default 900 KiB) of 'x' in aggregated_output each,
+//     then HELPER_MARKER, then HELPER_TAIL_LINES small agent_message items,
+//     exit HELPER_EXIT.
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
 	}
 	exitCode, _ := strconv.Atoi(os.Getenv("HELPER_EXIT"))
+
+	if os.Getenv("HELPER_MODE") == "bigoutput" {
+		n, _ := strconv.Atoi(os.Getenv("HELPER_LINES"))
+		if n <= 0 {
+			n = 40
+		}
+		lineBytes, _ := strconv.Atoi(os.Getenv("HELPER_LINE_BYTES"))
+		if lineBytes <= 0 {
+			lineBytes = 900 * 1024
+		}
+		tail, _ := strconv.Atoi(os.Getenv("HELPER_TAIL_LINES"))
+		fmt.Println(`{"type":"thread.started","thread_id":"helper-thread-big"}`)
+		blob := strings.Repeat("x", lineBytes)
+		for i := 1; i <= n; i++ {
+			fmt.Printf(`{"type":"item.completed","item":{"id":"cmd_%d","type":"command_execution","command":"cmd %d","aggregated_output":%q,"exit_code":0}}`+"\n", i, i, blob)
+		}
+		if marker := os.Getenv("HELPER_MARKER"); marker != "" {
+			_ = os.WriteFile(marker, []byte("done"), 0o644)
+		}
+		for i := 1; i <= tail; i++ {
+			fmt.Printf(`{"type":"item.completed","item":{"id":"tail_%d","type":"agent_message","text":"after big %d"}}`+"\n", i, i)
+		}
+		os.Exit(exitCode)
+	}
 
 	if os.Getenv("HELPER_MODE") == "longline" {
 		n, _ := strconv.Atoi(os.Getenv("HELPER_LONG_BYTES"))
@@ -418,5 +456,175 @@ func TestRunSendErrorKills(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("marker file exists: the process was not killed after the send error")
+	}
+}
+
+// Пункт 2 (второй раунд): лимит памяти общий для очереди и отправляемой
+// пачки — пока Send не вернулся, байты пачки всё ещё заняты.
+func TestStepQueueCountsInFlightBatch(t *testing.T) {
+	old := maxQueueBytes
+	maxQueueBytes = 3 * 1024
+	t.Cleanup(func() { maxQueueBytes = old })
+
+	q := newStepQueue()
+	step := func(seq int) NewStep {
+		return NewStep{Seq: seq, Type: "message", Summary: strings.Repeat("x", 1024)}
+	}
+	for i := 1; i <= 3; i++ {
+		q.push(step(i))
+	}
+	batch, sizes, closed := q.take()
+	if len(batch) != 3 || closed {
+		t.Fatalf("take = %d steps, closed=%v; want 3, false", len(batch), closed)
+	}
+	// The batch is in flight (Send has not returned yet): the cap covers it.
+	q.push(step(4))
+	if more, _, _ := q.take(); len(more) != 0 {
+		t.Fatalf("in-flight batch is not counted: %d more steps were queued", len(more))
+	}
+	// After Send returns the bytes are released and the queue accepts again.
+	q.release(sizes)
+	q.push(step(4))
+	more, _, _ := q.take()
+	if len(more) != 1 || more[0].Seq != 4 {
+		t.Fatalf("after release take = %+v, want the one new step", more)
+	}
+}
+
+// Пункт 2 (второй раунд): хвост payload — короткая копия, а не подстрока,
+// удерживающая весь исходный вывод. 40 шагов по 900 КиБ aggregated_output
+// не должны удерживать ~36 МиБ.
+func TestParserTailCopyKeepsHeapBounded(t *testing.T) {
+	big := strings.Repeat("x", 900*1024)
+	line := []byte(`{"type":"item.completed","item":{"id":"c","type":"command_execution","command":"c","aggregated_output":"` + big + `","exit_code":0}}`)
+
+	p := NewCodexParser()
+	var keep []Step
+	// Warm-up so the first parse's one-off allocations do not skew the delta.
+	p.Feed(line, time.Now())
+	keep = append(keep, p.Drain()...)
+	before := heapAlloc()
+
+	const n = 40
+	for i := 0; i < n; i++ {
+		p.Feed(line, time.Now())
+		keep = append(keep, p.Drain()...)
+	}
+	after := heapAlloc()
+	if len(keep) != n+1 {
+		t.Fatalf("kept steps = %d, want %d", len(keep), n+1)
+	}
+	if out, _ := keep[n].Payload["output"].(string); len(out) != outputTailBytes {
+		t.Fatalf("payload output = %d bytes, want %d", len(out), outputTailBytes)
+	}
+	res := int64(after) - int64(before)
+	if res > 15<<20 {
+		t.Fatalf("drained steps retain %d bytes of heap, want < 15 MiB (tails must be copies)", res)
+	}
+	if got := p.Drain(); len(got) != 0 {
+		t.Fatalf("Drain returned %d steps twice", len(got))
+	}
+}
+
+// Пункт 2 (второй раунд): длинный поток больших событий при недоступной сети
+// 30 с — чтение не блокируется, сырой лог полный, память не растёт со всем
+// историческим трейсом, после восстановления принятые шаги доходят.
+func TestRunNetworkDownBigTrace(t *testing.T) {
+	fastFlush(t, 50*time.Millisecond, 20)
+	oldMax := maxQueueBytes
+	maxQueueBytes = 8 << 20
+	t.Cleanup(func() { maxQueueBytes = oldMax })
+
+	const (
+		lines     = 40
+		lineBytes = 900 * 1024
+		tailLines = 3
+	)
+	marker := filepath.Join(t.TempDir(), "produced")
+	spec := helperSpec(t,
+		"HELPER_MODE=bigoutput",
+		"HELPER_LINES="+strconv.Itoa(lines),
+		"HELPER_LINE_BYTES="+strconv.Itoa(lineBytes),
+		"HELPER_TAIL_LINES="+strconv.Itoa(tailLines),
+		"HELPER_MARKER="+marker,
+		"HELPER_EXIT=0",
+	)
+
+	before := heapAlloc()
+	var during uint64
+	var sendErr error
+	var firstCall sync.Once
+	var mu sync.Mutex
+	var seqs []int
+	spec.Send = func(steps []NewStep) error {
+		firstCall.Do(func() {
+			// Network is down: Send blocks, the reader must keep draining.
+			time.Sleep(30 * time.Second)
+			if _, err := os.Stat(marker); err != nil {
+				sendErr = fmt.Errorf("helper did not finish while Send was blocked: %w", err)
+			}
+			during = heapAlloc()
+		})
+		mu.Lock()
+		for _, s := range steps {
+			seqs = append(seqs, s.Seq)
+		}
+		mu.Unlock()
+		return nil
+	}
+
+	start := time.Now()
+	res, err := Run(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if sendErr != nil {
+		t.Fatal(sendErr)
+	}
+	if elapsed := time.Since(start); elapsed < 30*time.Second {
+		t.Fatalf("Run took %v, want at least the 30 s outage", elapsed)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0", res.ExitCode)
+	}
+
+	// The raw log keeps every line, including the last big event.
+	info, err := os.Stat(spec.LogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() < int64(lines*lineBytes) {
+		t.Fatalf("raw log = %d bytes, want >= %d", info.Size(), lines*lineBytes)
+	}
+	raw, err := os.ReadFile(spec.LogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"cmd `+strconv.Itoa(lines)+`"`) {
+		t.Fatalf("raw log is missing the last big event")
+	}
+	raw = nil
+
+	// Memory during the outage stays bounded: the whole historical trace
+	// (40 x 900 KiB) must not be retained.
+	if delta := int64(during) - int64(before); delta > 20<<20 {
+		t.Fatalf("heap during the outage grew by %d bytes, want < 20 MiB", delta)
+	}
+
+	// After recovery every accepted step arrives, in Seq order, up to the tail.
+	mu.Lock()
+	got := append([]int(nil), seqs...)
+	mu.Unlock()
+	if len(got) == 0 {
+		t.Fatal("no steps arrived after recovery")
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i] <= got[i-1] {
+			t.Fatalf("Seq not increasing at %d: %d after %d", i, got[i], got[i-1])
+		}
+	}
+	wantLast := lines + tailLines
+	if got[len(got)-1] != wantLast {
+		t.Fatalf("last Seq = %d, want %d (tail steps must arrive)", got[len(got)-1], wantLast)
 	}
 }

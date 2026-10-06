@@ -4,12 +4,14 @@
 //
 // Parsers tolerate unknown events, unknown fields and broken lines: anything
 // unrecognized is ignored (it stays in the raw log). Step summaries are cut
-// at 300 runes; command and tool outputs keep only the last 20 KB.
+// at 300 runes; command and tool outputs keep only the last 20 KB, copied out
+// of the source line so a step never retains it.
 package agents
 
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -37,13 +39,20 @@ type Usage struct {
 	CostUSD           float64
 }
 
-// Parser consumes raw JSONL lines of one CLI and accumulates the trace.
+// Parser consumes raw JSONL lines of one CLI and accumulates the trace until
+// the runner drains it. A parser must not retain steps that were already
+// handed over: the runner calls Drain after every line, which is what keeps
+// the memory of a long run bounded (05-worker.md «Запуск агента и трейс»).
 type Parser interface {
 	// Feed consumes one stdout line; unknown or broken lines are ignored,
 	// Feed never reports errors. Steps are immutable once appended: a
 	// tool_result arrives as its own step, never by mutating an earlier one.
 	Feed(line []byte, ts time.Time)
-	// Steps returns every step parsed so far, in arrival order.
+	// Drain returns the steps parsed since the previous Drain call and
+	// forgets them, so a long trace never accumulates in the parser.
+	Drain() []Step
+	// Steps returns the steps accumulated since the last Drain without
+	// clearing them (inspection/tests).
 	Steps() []Step
 	// ThreadID is the codex thread id (thread.started), "" until known.
 	ThreadID() string
@@ -68,7 +77,9 @@ func headRunes(s string, n int) string {
 }
 
 // tailBytes returns the last n bytes of s, cut at a rune boundary so the
-// result stays valid UTF-8.
+// result stays valid UTF-8. The result is a fresh copy: a plain substring
+// would keep the whole original line (often hundreds of KiB) alive for as
+// long as the step lives.
 func tailBytes(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -77,7 +88,7 @@ func tailBytes(s string, n int) string {
 	for len(s) > 0 && s[0]&0xC0 == 0x80 {
 		s = s[1:]
 	}
-	return s
+	return strings.Clone(s)
 }
 
 // humanTokens renders a token count compactly: 12300 -> "12.3k".

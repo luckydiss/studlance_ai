@@ -279,6 +279,13 @@ func (p *claudeParser) fail(msg string) {
 	}
 }
 
+// Drain implements Parser: it hands the parsed steps over and forgets them.
+func (p *claudeParser) Drain() []Step {
+	steps := p.steps
+	p.steps = nil
+	return steps
+}
+
 // Steps implements Parser.
 func (p *claudeParser) Steps() []Step { return p.steps }
 

@@ -76,11 +76,12 @@ var (
 	flushBatchSize = 50
 )
 
-// maxQueueBytes caps the memory of the send queue (approximated as summary
-// length plus payload JSON length). Steps parsed past the cap are dropped:
-// they stay only in the raw log, but their Seq numbers are still consumed
-// so the gaps are visible on the server. Package-level so tests can shrink
-// it.
+// maxQueueBytes caps the memory of the trace pipeline (approximated as
+// summary length plus payload JSON length). The limit covers the queued steps
+// AND the batch currently being sent together, so a stuck network cannot hold
+// twice the cap. Steps parsed past the cap are dropped: they stay only in the
+// raw log, but their Seq numbers are still consumed so the gaps are visible
+// on the server. Package-level so tests can shrink it.
 var maxQueueBytes = 50 << 20 // 50 MiB
 
 // killWaitTimeout bounds how long Run waits for the process to exit after a
@@ -227,10 +228,11 @@ func Run(ctx context.Context, spec RunSpec) (Result, error) {
 
 	// The stdout reader owns the parser: it logs every line in full
 	// (however long), feeds compacted lines to the parser and queues new
-	// steps with their Seq numbers.
+	// steps with their Seq numbers. Steps are drained from the parser after
+	// every line, so neither the parser nor the raw line buffers accumulate.
 	go func() {
 		br := bufio.NewReaderSize(stdout, 64<<10)
-		drained, seq := 0, 0
+		seq := 0
 		notified := false
 		readLines(br, func(line []byte) {
 			logLine(line)
@@ -252,14 +254,12 @@ func Run(ctx context.Context, spec RunSpec) (Result, error) {
 					go spec.OnSession(id)
 				}
 			}
-			steps := parser.Steps()
-			for _, s := range steps[drained:] {
+			for _, s := range parser.Drain() {
 				seq++
 				if spec.Send != nil {
 					queue.push(NewStep{Seq: seq, Ts: s.Ts, Type: s.Type, Summary: s.Summary, Payload: s.Payload})
 				}
 			}
-			drained = len(steps)
 		})
 		queue.close()
 		close(stdoutDone)
@@ -340,11 +340,13 @@ func readLines(r *bufio.Reader, fn func(line []byte)) {
 }
 
 // stepQueue is the in-memory buffer between the parsing reader and the Send
-// goroutine.
+// goroutine. Its byte budget covers the queued steps and the batch currently
+// in flight together: bytes stay accounted for until Send returns.
 type stepQueue struct {
 	mu     sync.Mutex
 	signal chan struct{} // buffered 1: the batch is full or the queue closed
 	steps  []NewStep
+	sizes  []int
 	bytes  int
 	closed bool
 	logged bool // the overflow loss was already logged
@@ -354,11 +356,16 @@ func newStepQueue() *stepQueue {
 	return &stepQueue{signal: make(chan struct{}, 1)}
 }
 
-// push appends a step unless the queue is over maxQueueBytes; the loss is
-// logged once to the runner's stderr (dropped steps stay in the raw log,
-// their Seq numbers are still consumed).
+// stepSize estimates the heap a queued step holds.
+func stepSize(s NewStep) int {
+	return len(s.Summary) + len(payloadJSON(s.Payload))
+}
+
+// push appends a step unless the queue plus the in-flight batch is over
+// maxQueueBytes; the loss is logged once to the runner's stderr (dropped
+// steps stay in the raw log, their Seq numbers are still consumed).
 func (q *stepQueue) push(s NewStep) {
-	size := len(s.Summary) + len(payloadJSON(s.Payload))
+	size := stepSize(s)
 	q.mu.Lock()
 	if q.bytes+size > maxQueueBytes {
 		if !q.logged {
@@ -372,6 +379,7 @@ func (q *stepQueue) push(s NewStep) {
 	}
 	q.bytes += size
 	q.steps = append(q.steps, s)
+	q.sizes = append(q.sizes, size)
 	full := len(q.steps) >= flushBatchSize
 	q.mu.Unlock()
 	if full {
@@ -379,15 +387,28 @@ func (q *stepQueue) push(s NewStep) {
 	}
 }
 
-// take returns and removes all pending steps; closed reports whether the
-// reader is done and no more steps will come.
-func (q *stepQueue) take() (batch []NewStep, closed bool) {
+// take returns and removes all pending steps with their sizes; closed reports
+// whether the reader is done and no more steps will come. The bytes remain
+// accounted for until release, so the caller must release the batch.
+func (q *stepQueue) take() (batch []NewStep, sizes []int, closed bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	batch = q.steps
-	q.steps = nil
-	q.bytes = 0
-	return batch, q.closed
+	batch, sizes = q.steps, q.sizes
+	q.steps, q.sizes = nil, nil
+	return batch, sizes, q.closed
+}
+
+// release frees the byte accounting of a batch returned by take; it is called
+// once Send has returned (successfully or not), when the batch is garbage.
+func (q *stepQueue) release(sizes []int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, size := range sizes {
+		q.bytes -= size
+	}
+	if q.bytes < 0 {
+		q.bytes = 0
+	}
 }
 
 // close marks the queue complete and wakes the sender for the final flush.
@@ -407,14 +428,18 @@ func (q *stepQueue) notify() {
 
 // sendLoop flushes queued steps through send until the queue is closed and
 // drained: a batch goes out every flushInterval or once flushBatchSize
-// steps are pending, whichever comes first. send may block arbitrarily long.
+// steps are pending, whichever comes first. send may block arbitrarily long;
+// its batch keeps counting against maxQueueBytes until it returns, so the
+// queue never grows past the cap together with it.
 func (q *stepQueue) sendLoop(send func([]NewStep) error) error {
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
 	for {
-		batch, closed := q.take()
+		batch, sizes, closed := q.take()
 		if len(batch) > 0 {
-			if err := send(batch); err != nil {
+			err := send(batch)
+			q.release(sizes)
+			if err != nil {
 				return err
 			}
 			continue
