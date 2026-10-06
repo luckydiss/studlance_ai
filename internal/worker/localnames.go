@@ -16,40 +16,66 @@ import (
 // The mapping is stable: it lives in .studlance/localnames.json and is reused
 // between continue/retry, so a file never changes its on-disk name after a
 // worker restart. Uniqueness is case-insensitive (Windows filesystems compare
-// file names without case) and covers folder segments as well as file names.
+// file names without case) and tree-aware: an assigned local path is either a
+// file or a directory, a file can never be a directory, and a file can never
+// be a parent of another path. Collisions are resolved with a stable "~N"
+// suffix in the conflicting segment.
 //
 // One mapping is used everywhere a server path turns into a local one:
 // downloading, TASK.md, the {{.Files}} prompt block and REVISION-<n>.md.
 type localNames struct {
 	path string
 
-	mu      sync.Mutex
-	byPath  map[string]string // server rel path -> local rel path
-	byLocal map[string]string // strings.ToLower(local rel path) -> server rel path
+	mu     sync.Mutex
+	byPath map[string]string // server rel path -> local rel path
+	files  map[string]string // strings.ToLower(local file path) -> server rel path
+	dirs   map[string]bool   // strings.ToLower(local dir path) -> true
 }
 
-// loadLocalNames reads the persisted mapping; a missing or broken file just
-// yields an empty mapping (it is rebuilt deterministically).
+// loadLocalNames reads the persisted mapping and repairs it when an older
+// worker left a file/directory collision behind: entries are taken in sorted
+// server-path order, a correct entry keeps its name and a conflicting one is
+// renamed and saved. A missing or broken file yields an empty mapping.
 func loadLocalNames(path string) *localNames {
 	m := &localNames{
-		path:    path,
-		byPath:  map[string]string{},
-		byLocal: map[string]string{},
+		path:   path,
+		byPath: map[string]string{},
+		files:  map[string]string{},
+		dirs:   map[string]bool{},
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return m
 	}
-	var byPath map[string]string
-	if err := json.Unmarshal(raw, &byPath); err != nil {
+	var stored map[string]string
+	if err := json.Unmarshal(raw, &stored); err != nil {
 		return m
 	}
-	for server, local := range byPath {
-		if server == "" || local == "" {
+	servers := make([]string, 0, len(stored))
+	for server := range stored {
+		if server != "" {
+			servers = append(servers, server)
+		}
+	}
+	sort.Strings(servers)
+
+	changed := false
+	for _, server := range servers {
+		local := stored[server]
+		if local == "" {
+			changed = true
 			continue
 		}
-		m.byPath[server] = local
-		m.byLocal[strings.ToLower(local)] = server
+		if m.conflictIndex(local) >= 0 {
+			// A broken map from an older worker: the path cannot be used as
+			// is, pick a safe name instead of dropping the file.
+			local = m.uniqueLocked(server)
+			changed = true
+		}
+		m.registerLocked(server, local)
+	}
+	if changed {
+		m.saveLocked()
 	}
 	return m
 }
@@ -67,16 +93,16 @@ func (m *localNames) assignAll(serverPaths []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	changed := false
+	seen := make(map[string]bool, len(paths))
 	for _, sp := range paths {
-		if sp == "" {
+		if sp == "" || seen[sp] {
 			continue
 		}
+		seen[sp] = true
 		if _, ok := m.byPath[sp]; ok {
 			continue
 		}
-		local := m.uniqueLocked(sp)
-		m.byPath[sp] = local
-		m.byLocal[strings.ToLower(local)] = sp
+		m.registerLocked(sp, m.uniqueLocked(sp))
 		changed = true
 	}
 	if changed {
@@ -96,38 +122,93 @@ func (m *localNames) local(server string) string {
 		return local
 	}
 	local := m.uniqueLocked(server)
-	m.byPath[server] = local
-	m.byLocal[strings.ToLower(local)] = server
+	m.registerLocked(server, local)
 	m.saveLocked()
 	return local
 }
 
-// uniqueLocked picks a free local name for server: the base Windows-safe
-// mapping when it is free, otherwise the base with a "~N" suffix before the
-// extension of the last segment. Callers hold m.mu.
-func (m *localNames) uniqueLocked(server string) string {
-	base := mapLocalName(server)
-	candidate := base
-	for n := 2; ; n++ {
-		if _, taken := m.byLocal[strings.ToLower(candidate)]; !taken {
-			return candidate
+// registerLocked records a server->local mapping and the tree nodes it
+// implies: the full path is a file, every proper prefix is a directory.
+// Callers hold m.mu.
+func (m *localNames) registerLocked(server, local string) {
+	m.byPath[server] = local
+	segs := strings.Split(local, "/")
+	m.files[strings.ToLower(local)] = server
+	for i := 1; i < len(segs); i++ {
+		p := strings.ToLower(strings.Join(segs[:i], "/"))
+		if _, isFile := m.files[p]; !isFile {
+			m.dirs[p] = true
 		}
-		candidate = withSuffix(base, n)
 	}
 }
 
-// withSuffix inserts "~N" before the extension of the last path segment:
-// "отчёт.docx" -> "отчёт~2.docx", "папка/файл" -> "папка/файл~2".
-func withSuffix(rel string, n int) string {
-	segs := strings.Split(rel, "/")
-	last := segs[len(segs)-1]
-	base, ext := last, ""
-	// A leading dot is not an extension separator (.gitignore stays whole).
-	if i := strings.LastIndexByte(last, '.'); i > 0 {
-		base, ext = last[:i], last[i:]
+// conflictIndex reports the index of the first segment that makes local
+// unusable in the current tree, or -1 when the path is free. A path conflicts
+// when a directory it needs is already a file, when the path itself is
+// already a file (case-insensitively), or when the path is already a
+// directory (a file cannot be a folder).
+func (m *localNames) conflictIndex(local string) int {
+	segs := strings.Split(local, "/")
+	for i := 1; i < len(segs); i++ {
+		p := strings.ToLower(strings.Join(segs[:i], "/"))
+		if _, isFile := m.files[p]; isFile {
+			return i - 1
+		}
 	}
-	segs[len(segs)-1] = fmt.Sprintf("%s~%d%s", base, n, ext)
-	return strings.Join(segs, "/")
+	key := strings.ToLower(local)
+	if _, isFile := m.files[key]; isFile {
+		return len(segs) - 1
+	}
+	if m.dirs[key] {
+		return len(segs) - 1
+	}
+	return -1
+}
+
+// uniqueLocked picks a free local name for server: the base Windows-safe
+// mapping when it is free, otherwise the same path with a "~N" suffix in the
+// conflicting segment (re-checked after every attempt, because renaming a
+// segment can expose another collision). Callers hold m.mu.
+func (m *localNames) uniqueLocked(server string) string {
+	segs := strings.Split(mapLocalName(server), "/")
+	suffix := make([]int, len(segs))
+	for attempt := 0; attempt < 1<<20; attempt++ {
+		candidate := joinSegments(segs, suffix)
+		idx := m.conflictIndex(candidate)
+		if idx < 0 {
+			return candidate
+		}
+		if suffix[idx] < 2 {
+			suffix[idx] = 2
+		} else {
+			suffix[idx]++
+		}
+	}
+	return joinSegments(segs, suffix)
+}
+
+// joinSegments applies the per-segment suffix numbers (0 = unchanged).
+func joinSegments(segs []string, suffix []int) string {
+	out := make([]string, len(segs))
+	for i, seg := range segs {
+		if suffix[i] >= 2 {
+			out[i] = segmentWithSuffix(seg, suffix[i])
+		} else {
+			out[i] = seg
+		}
+	}
+	return strings.Join(out, "/")
+}
+
+// segmentWithSuffix inserts "~N" before the extension of one path segment:
+// "отчёт.docx" -> "отчёт~2.docx", "папка" -> "папка~2".
+func segmentWithSuffix(seg string, n int) string {
+	base, ext := seg, ""
+	// A leading dot is not an extension separator (.gitignore stays whole).
+	if i := strings.LastIndexByte(seg, '.'); i > 0 {
+		base, ext = seg[:i], seg[i:]
+	}
+	return fmt.Sprintf("%s~%d%s", base, n, ext)
 }
 
 // saveLocked writes the mapping atomically. Callers hold m.mu.
