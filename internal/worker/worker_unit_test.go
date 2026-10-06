@@ -44,64 +44,118 @@ func TestMapLocalName(t *testing.T) {
 }
 
 // Пункт 6: continue/answer без известной сессии = полный промпт этапа.
-func TestBuildPrompt(t *testing.T) {
-	mk := func(action string, attempt int, answer *string) *jobExec {
-		asn := &httpapi.Assignment{
-			Action:  httpapi.AssignmentAction(action),
-			Stage:   httpapi.AssignmentStageDraft,
-			Attempt: attempt,
-			Prompt:  "Запрос клиента",
-			Answer:  answer,
-			Version: 1,
-		}
-		j := &jobExec{asn: asn, dir: t.TempDir()}
-		j.inputFiles = []httpapi.WorkerInputFile{{Path: "задание.txt", Size: 100}}
-		return j
-	}
-
-	// start, attempt 0: промпт draft без блока повтора.
-	p, err := mk("start", 0, nil).buildPrompt("draft", "start", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(p, "Запрос клиента") || !strings.Contains(p, "Ты выполняешь студенческую работу") {
-		t.Fatalf("start: нет запроса/общего блока")
-	}
-	if strings.Contains(p, "Предыдущая попытка") {
-		t.Fatalf("start attempt 0: не должно быть блока повтора")
-	}
-
-	// start, attempt 1: блок повтора есть.
-	p, _ = mk("start", 1, nil).buildPrompt("draft", "start", false)
-	if !strings.Contains(p, "Предыдущая попытка не завершилась") {
-		t.Fatalf("start attempt 1: нет блока повтора")
-	}
-
-	// continue с сессией: короткий промпт continue.
-	p, _ = mk("continue", 0, nil).buildPrompt("draft", "continue", true)
-	if strings.Contains(p, "Запрос клиента") || !strings.Contains(p, "Работа была прервана") {
-		t.Fatalf("continue+resume: не тот промпт:\n%s", p)
-	}
-
-	// continue без сессии: полный промпт этапа + блок повтора.
-	p, _ = mk("continue", 0, nil).buildPrompt("draft", "continue", false)
-	if !strings.Contains(p, "Запрос клиента") || !strings.Contains(p, "Ты выполняешь студенческую работу") ||
-		!strings.Contains(p, "Предыдущая попытка не завершилась") {
-		t.Fatalf("continue без сессии: нет полного промпта:\n%s", p)
-	}
-
-	// answer с сессией: только ответ.
+// Второй раунд, п.5: таблица на все этапы, действия и наличие/отсутствие
+// сессии — полный промпт (общий блок, запрос клиента, локальные имена файлов,
+// инструкции этапа) или короткий диалоговый.
+func TestBuildPromptTable(t *testing.T) {
 	ans := "Вариант 14"
-	p, _ = mk("answer", 0, &ans).buildPrompt("draft", "answer", true)
-	if !strings.Contains(p, "Студент ответил на твой вопрос:\nВариант 14") || strings.Contains(p, "Предыдущая попытка") {
-		t.Fatalf("answer+resume: не тот промпт:\n%s", p)
+	const (
+		commonMarker  = "Ты выполняешь студенческую работу"
+		request       = "Запрос клиента"
+		fileLine      = "- input/задание.txt (100 Б)"
+		retryMarker   = "Предыдущая попытка не завершилась"
+		shortContinue = "Работа была прервана"
+	)
+
+	cases := []struct {
+		name         string
+		stage        string
+		action       string
+		resume       bool
+		attempt      int
+		full         bool
+		retry        bool
+		answerSuffix bool
+		short        string // "continue" | "answer" | "revise" | ""
+	}{
+		{name: "start draft attempt0", stage: "draft", action: "start", full: true},
+		{name: "start draft attempt1", stage: "draft", action: "start", attempt: 1, full: true, retry: true},
+		{name: "start verify attempt1", stage: "verify", action: "start", attempt: 1, full: true, retry: true},
+		{name: "start revise", stage: "revise", action: "start", full: true},
+		{name: "continue resume", stage: "draft", action: "continue", resume: true, short: "continue"},
+		{name: "continue no session draft", stage: "draft", action: "continue", full: true, retry: true},
+		{name: "continue no session verify", stage: "verify", action: "continue", full: true, retry: true},
+		{name: "continue no session revise", stage: "revise", action: "continue", full: true, retry: true},
+		{name: "answer resume", stage: "verify", action: "answer", resume: true, short: "answer"},
+		{name: "answer no session draft", stage: "draft", action: "answer", full: true, retry: true, answerSuffix: true},
+		{name: "answer no session verify", stage: "verify", action: "answer", full: true, retry: true, answerSuffix: true},
+		{name: "answer no session revise", stage: "revise", action: "answer", full: true, retry: true, answerSuffix: true},
+		{name: "revise resume", stage: "revise", action: "revise", resume: true, short: "revise"},
+		{name: "revise no session", stage: "revise", action: "revise", full: true},
 	}
 
-	// answer без сессии: полный промпт этапа + ответ в конце.
-	p, _ = mk("answer", 0, &ans).buildPrompt("draft", "answer", false)
-	if !strings.Contains(p, "Запрос клиента") || !strings.Contains(p, "Предыдущая попытка не завершилась") ||
-		!strings.Contains(p, "Студент ответил на вопрос: Вариант 14") {
-		t.Fatalf("answer без сессии: нет ответа/полного промпта:\n%s", p)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			asn := &httpapi.Assignment{
+				Action:  httpapi.AssignmentAction(tc.action),
+				Stage:   httpapi.AssignmentStage(tc.stage),
+				Attempt: tc.attempt,
+				Prompt:  request,
+				Answer:  &ans,
+				Version: 2,
+			}
+			j := &jobExec{asn: asn, dir: t.TempDir()}
+			j.inputFiles = []httpapi.WorkerInputFile{{Path: "задание.txt", Size: 100}}
+
+			p, err := j.buildPrompt(tc.stage, tc.action, tc.resume)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			hasCommon := strings.Contains(p, commonMarker)
+			hasRequest := strings.Contains(p, request)
+			hasFiles := strings.Contains(p, fileLine)
+			if tc.full {
+				if !hasCommon || !hasRequest || !hasFiles {
+					t.Fatalf("full prompt is missing the common block/request/files:\n%s", p)
+				}
+				switch tc.stage {
+				case "draft":
+					if !strings.Contains(p, "Сначала изучи все материалы") {
+						t.Fatalf("draft instructions missing:\n%s", p)
+					}
+				case "verify":
+					if !strings.Contains(p, "Твоя задача — довести работу до сдачи") {
+						t.Fatalf("verify instructions missing:\n%s", p)
+					}
+				case "revise":
+					if !strings.Contains(p, "Студент посмотрел версию 1") || !strings.Contains(p, "input/revision-2/") {
+						t.Fatalf("revise instructions missing:\n%s", p)
+					}
+				}
+			} else if hasCommon || hasRequest || hasFiles {
+				t.Fatalf("short prompt must not repeat the common block/request/files:\n%s", p)
+			}
+
+			if got := strings.Contains(p, retryMarker); got != tc.retry {
+				t.Fatalf("retry block present = %v, want %v:\n%s", got, tc.retry, p)
+			}
+
+			trimmed := strings.TrimRight(p, "\n")
+			if tc.answerSuffix {
+				want := "Студент ответил на вопрос: " + ans
+				if !strings.HasSuffix(trimmed, want) {
+					t.Fatalf("answer prompt must end with %q:\n%s", want, p)
+				}
+			} else if strings.Contains(p, "Студент ответил на вопрос:") {
+				t.Fatalf("unexpected answer suffix:\n%s", p)
+			}
+
+			switch tc.short {
+			case "continue":
+				if !strings.Contains(p, shortContinue) {
+					t.Fatalf("short continue prompt expected:\n%s", p)
+				}
+			case "answer":
+				if !strings.Contains(p, "Студент ответил на твой вопрос:\n"+ans) {
+					t.Fatalf("short answer prompt expected:\n%s", p)
+				}
+			case "revise":
+				if !strings.Contains(p, "Студент посмотрел версию 1") || !strings.Contains(p, "REVISION-2.md") {
+					t.Fatalf("short revise prompt expected:\n%s", p)
+				}
+			}
+		})
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 
 // PromptsVersion identifies the embedded prompt set; the worker writes it to
 // jobs.state.prompts_version.
-const PromptsVersion = "2026-10-1"
+const PromptsVersion = "2026-10-2"
 
 //go:embed *.md
 var files embed.FS
@@ -29,7 +29,8 @@ type Vars struct {
 
 var tmpl = template.Must(template.ParseFS(files, "*.md"))
 
-// Render renders one of the templates: draft, verify, revise, answer, continue.
+// Render renders one of the templates: draft, verify, revise, revise_full,
+// answer, continue.
 func Render(name string, v Vars) (string, error) {
 	var buf bytes.Buffer
 	if err := tmpl.ExecuteTemplate(&buf, name+".md", v); err != nil {

@@ -298,9 +298,14 @@ func (j *jobExec) postQuestion(ctx context.Context, runID, text string) error {
 	return j.w.cl.Question(ctx, j.asn.JobId, j.asn.Epoch, text)
 }
 
-// buildPrompt renders the stage prompt (06-prompts.md). continue/answer
-// without a known session degrade to a full fresh stage prompt (resume=false):
-// the stage template with the retry block, plus the answer text for answer.
+// buildPrompt renders the stage prompt (06-prompts.md).
+//
+// A run without a known session (start, continue/answer right after a worker
+// restart, revise without the claude session) always gets the full stage
+// prompt: the common block, the client's request, the local file names and
+// the stage instructions. Only a session resume keeps the short prompt
+// (continue, answer, revise). The «Предыдущая попытка не завершилась…» block
+// is added on start with attempt ≥ 1 and on continue/answer without a session.
 func (j *jobExec) buildPrompt(stage, action string, resume bool) (string, error) {
 	vars := prompts.Vars{
 		Prompt: j.asn.Prompt,
@@ -308,12 +313,17 @@ func (j *jobExec) buildPrompt(stage, action string, resume bool) (string, error)
 		Retry: (action == "start" && j.asn.Attempt >= 1) ||
 			((action == "continue" || action == "answer") && !resume),
 	}
-	stagePrompt := func() (string, error) {
+	// full selects the standalone stage template (dialogue-independent); the
+	// short revise template is used only when the claude session is resumed.
+	stagePrompt := func(full bool) (string, error) {
 		switch stage {
 		case "revise":
 			vars.Version = j.asn.Version
 			vars.PrevVersion = j.asn.Version - 1
 			vars.RevisionFile = fmt.Sprintf("REVISION-%d.md", j.asn.Version)
+			if full {
+				return prompts.Render("revise_full", vars)
+			}
 			return prompts.Render("revise", vars)
 		case "verify":
 			return prompts.Render("verify", vars)
@@ -329,9 +339,12 @@ func (j *jobExec) buildPrompt(stage, action string, resume bool) (string, error)
 			vars.Answer = *j.asn.Answer
 		}
 		return prompts.Render("answer", vars)
+	case action == "revise" && resume:
+		// The claude session is known: the short revise prompt is enough.
+		return stagePrompt(false)
 	case action == "answer":
 		// No session to resume: full stage prompt plus the client's answer.
-		p, err := stagePrompt()
+		p, err := stagePrompt(true)
 		if err != nil {
 			return "", err
 		}
@@ -341,7 +354,7 @@ func (j *jobExec) buildPrompt(stage, action string, resume bool) (string, error)
 		}
 		return p + "\n\nСтудент ответил на вопрос: " + answer + "\n", nil
 	default:
-		return stagePrompt()
+		return stagePrompt(true)
 	}
 }
 

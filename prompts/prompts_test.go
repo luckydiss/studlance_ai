@@ -17,7 +17,7 @@ func TestRenderAll(t *testing.T) {
 		RevisionFile: "REVISION-2.md",
 		Retry:        true,
 	}
-	for _, name := range []string{"draft", "verify", "revise", "answer", "continue"} {
+	for _, name := range []string{"draft", "verify", "revise", "revise_full", "answer", "continue"} {
 		out, err := prompts.Render(name, v)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -52,5 +52,27 @@ func TestRenderVars(t *testing.T) {
 	}
 	if !strings.Contains(a, "Вариант 14") {
 		t.Fatal("answer missing answer text")
+	}
+
+	// The full revise prompt (no claude session) carries the common block,
+	// the client request and the local file names; verify does too.
+	full := prompts.Vars{Prompt: "Запрос", Files: "- input/a.pdf (1 КБ)", Version: 2, PrevVersion: 1, RevisionFile: "REVISION-2.md"}
+	rf, err := prompts.Render("revise_full", full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Ты выполняешь студенческую работу", "Запрос", "- input/a.pdf (1 КБ)", "REVISION-2.md"} {
+		if !strings.Contains(rf, want) {
+			t.Fatalf("revise_full missing %q:\n%s", want, rf)
+		}
+	}
+	v, err := prompts.Render("verify", full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Запрос", "- input/a.pdf (1 КБ)"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("verify missing %q:\n%s", want, v)
+		}
 	}
 }
