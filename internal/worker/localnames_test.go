@@ -82,11 +82,15 @@ func TestInputNamesKeepDifferentFiles(t *testing.T) {
 	dir := t.TempDir()
 	j := nameJob(t, dir, srv)
 
+	// The production path registers every server file before downloading.
+	inputs := make([]httpapi.WorkerInputFile, 0, len(files))
 	for p, b := range files {
-		if err := j.downloadInput(context.Background(), httpapi.WorkerInputFile{
-			Path: p, Size: len(b), Sha256: shaHex(b),
-		}); err != nil {
-			t.Fatalf("download %q: %v", p, err)
+		inputs = append(inputs, httpapi.WorkerInputFile{Path: p, Size: len(b), Sha256: shaHex(b)})
+	}
+	j.assignInputNames(inputs)
+	for _, f := range inputs {
+		if err := j.downloadInput(context.Background(), f); err != nil {
+			t.Fatalf("download %q: %v", f.Path, err)
 		}
 	}
 
