@@ -225,7 +225,10 @@ func TestRevision(t *testing.T) {
 		{"document_id": %q, "page": 1, "x": 0.1, "y": 0.1, "w": 0.4, "h": 0.2, "text": "Уточните расчёт прогиба"},
 		{"document_id": %q, "page": 2, "x": 0.2, "y": 0.3, "w": 0.3, "h": 0.2, "text": "Добавьте эпюру моментов"}
 	]}`, docID, docID)
-	body, ct := revisionBody(t, data, map[string]string{"дополнительные данные.txt": "l = 2 м"})
+	body, ct := revisionBody(t, data, map[string]string{
+		"дополнительные данные.txt": "l = 2 м",
+		"remarks/1.png": "ATTACHMENT NOT A CROP",
+	})
 	resp := h.doRaw(http.MethodPost, "/api/client/jobs/"+jobID+"/revisions", h.clientCookie, body, ct)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
@@ -244,16 +247,27 @@ func TestRevision(t *testing.T) {
 		t.Fatalf("REVISION-2.md: %v", err)
 	}
 	text := string(raw)
-	for _, want := range []string{"# Доработка — версия 2", "Уточните расчёт прогиба", "стр. 1", "Вырезка: input/revision-2/remarks/1.png", "input/revision-2/дополнительные данные.txt"} {
+	for _, want := range []string{
+		"# Доработка — версия 2", "Уточните расчёт прогиба", "стр. 1",
+		"Вырезка: revision-crops/2/1.png", "Вырезка: revision-crops/2/2.png",
+		"input/revision-2/дополнительные данные.txt",
+		"input/revision-2/remarks/1.png",
+	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("REVISION-2.md missing %q:\n%s", want, text)
 		}
 	}
+	// Crops live in their own namespace; the client attachment with the same
+	// name stays in input with its own bytes.
 	for _, idx := range []int{1, 2} {
-		crop := filepath.Join(h.workDir, jobID, "input", "revision-2", "remarks", fmt.Sprintf("%d.png", idx))
+		crop := filepath.Join(h.workDir, jobID, "revision-crops", "2", fmt.Sprintf("%d.png", idx))
 		if fi, err := os.Stat(crop); err != nil || fi.Size() == 0 {
 			t.Fatalf("crop %d missing or empty: %v", idx, err)
 		}
+	}
+	attachment := filepath.Join(h.workDir, jobID, "input", "revision-2", "remarks", "1.png")
+	if got, err := os.ReadFile(attachment); err != nil || string(got) != "ATTACHMENT NOT A CROP" {
+		t.Fatalf("input attachment damaged by the crop: %q %v", got, err)
 	}
 
 	// changed_boxes непустые на изменённых страницах версии 2. Идентификаторы

@@ -19,10 +19,14 @@ import (
 // (05-worker.md «Подготовка доработки»): remark crops cut from the previous
 // version's pages, uploaded and referenced from REVISION-<n>.md.
 //
-// It is idempotent and self-healing: the crops are checked on disk, and a
-// missing, empty or truncated crop is rebuilt from the previous snapshot
-// again. REVISION-<n>.md is written atomically and references exactly the
-// crops that exist, so a continue/answer after an interrupted preparation
+// Crops live in revision-crops/<n>/<idx>.png next to the job folder, outside
+// input/: a client attachment named remarks/<idx>.png is an ordinary input
+// file and can never be mistaken for a prepared crop.
+//
+// The preparation is idempotent and self-healing: the crops are checked on
+// disk, and a missing, empty or truncated crop is rebuilt from the previous
+// snapshot again. REVISION-<n>.md is written atomically and references exactly
+// the crops that exist, so a continue/answer after an interrupted preparation
 // never leaves a link to a file that is not there. Uploads are idempotent
 // (same bytes, same key).
 func (j *jobExec) prepareRevision(ctx context.Context) error {
@@ -33,8 +37,8 @@ func (j *jobExec) prepareRevision(ctx context.Context) error {
 	n := rev.Version
 	mdPath := filepath.Join(j.dir, fmt.Sprintf("REVISION-%d.md", n))
 
-	remarksDir := filepath.Join(j.dir, "input", fmt.Sprintf("revision-%d", n), "remarks")
-	if err := os.MkdirAll(remarksDir, 0o755); err != nil {
+	cropsDir := revisionCropsDir(j.dir, n)
+	if err := os.MkdirAll(cropsDir, 0o755); err != nil {
 		return err
 	}
 	prevDir := filepath.Join(j.snapshotsDir(), fmt.Sprintf("v%d", n-1))
@@ -45,11 +49,11 @@ func (j *jobExec) prepareRevision(ctx context.Context) error {
 		if j.cancelRequested.Load() {
 			return errCanceled
 		}
-		cropPath := remarkCropPath(remarksDir, r.Idx)
+		cropPath := remarkCropPath(cropsDir, r.Idx)
 		if !validCrop(cropPath) {
 			// Missing, empty or broken: rebuild it from the previous
 			// snapshot's page image.
-			built, err := j.cropRemark(prevDir, prevInfo, remarksDir, n, r)
+			built, err := j.cropRemark(prevDir, prevInfo, cropsDir, n, r)
 			if err != nil {
 				// A missing page image must not fail the stage: the remark
 				// text and coordinates still reach the agent. The stale crop
@@ -79,9 +83,15 @@ func (j *jobExec) prepareRevision(ctx context.Context) error {
 	return writeFileAtomic(mdPath, []byte(j.revisionMD(rev, cropped)))
 }
 
+// revisionCropsDir is the local folder of the remark crops of version n,
+// relative to the job folder. It is deliberately outside input/.
+func revisionCropsDir(jobDir string, n int) string {
+	return filepath.Join(jobDir, "revision-crops", itoa(n))
+}
+
 // remarkCropPath is the local path of a remark crop.
-func remarkCropPath(remarksDir string, idx int) string {
-	return filepath.Join(remarksDir, fmt.Sprintf("%d.png", idx))
+func remarkCropPath(cropsDir string, idx int) string {
+	return filepath.Join(cropsDir, fmt.Sprintf("%d.png", idx))
 }
 
 // validCrop reports whether the file is a decodable PNG: an empty or
@@ -126,7 +136,7 @@ func writeFileAtomic(path string, data []byte) error {
 
 // cropRemark cuts the remark area (plus a 3 % margin, clamped to the page)
 // from the previous snapshot's page image.
-func (j *jobExec) cropRemark(prevDir string, prevInfo snapshotInfo, remarksDir string, n int, r httpapi.AssignmentRemark) (string, error) {
+func (j *jobExec) cropRemark(prevDir string, prevInfo snapshotInfo, cropsDir string, n int, r httpapi.AssignmentRemark) (string, error) {
 	prevIdx := findPrevDoc(prevInfo, r.FilePath)
 	if prevIdx < 0 {
 		return "", fmt.Errorf("документ %q не найден в снимке v%d", r.FilePath, n-1)
@@ -158,10 +168,10 @@ func (j *jobExec) cropRemark(prevDir string, prevInfo snapshotInfo, remarksDir s
 	if !ok {
 		return "", fmt.Errorf("картинка не поддерживает вырезку")
 	}
-	dst := remarkCropPath(remarksDir, r.Idx)
+	dst := remarkCropPath(cropsDir, r.Idx)
 	// Write through a temporary file: an interrupted crop never overwrites a
 	// good one with a truncated PNG.
-	tmp, err := os.CreateTemp(remarksDir, ".crop-*")
+	tmp, err := os.CreateTemp(cropsDir, ".crop-*")
 	if err != nil {
 		return "", err
 	}
@@ -207,7 +217,7 @@ func (j *jobExec) revisionMD(rev *httpapi.AssignmentRevision, cropped map[int]bo
 		fmt.Fprintf(&b, "%d. «%s» — %s (%s), стр. %d, область: x=%.3f, y=%.3f, w=%.3f, h=%.3f (доли листа, от левого верхнего угла).",
 			r.Idx, r.Text, r.DocumentTitle, r.FilePath, r.Page, r.X, r.Y, r.W, r.H)
 		if cropped[r.Idx] {
-			fmt.Fprintf(&b, " Вырезка: input/revision-%d/remarks/%d.png", n, r.Idx)
+			fmt.Fprintf(&b, " Вырезка: revision-crops/%d/%d.png", n, r.Idx)
 		}
 		b.WriteString("\n")
 	}

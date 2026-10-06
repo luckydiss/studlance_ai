@@ -554,14 +554,19 @@ func (s *Server) WorkerPutRevisionRemark(ctx context.Context, request WorkerPutR
 		}
 		return WorkerPutRevisionRemark409JSONResponse{StaleLeaseJSONResponse(workerErrBody(err))}, nil
 	}
-	key := fmt.Sprintf("jobs/%s/input/revision-%d/remarks/%d.png", jobID, request.N, request.Idx)
+	key := fmt.Sprintf("jobs/%s/revision-crops/%d/%d.png", jobID, request.N, request.Idx)
 	body := http.MaxBytesReader(responseFrom(ctx), io.NopCloser(request.Body), maxSnapshotFile)
 	size, sha, err := s.blobs.Put(ctx, key, body)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.queue.RecordRevisionCrop(ctx, jobID, w.ID, int64(request.Params.Epoch), int64(request.N), int64(request.Idx), key, size, sha); err != nil {
-		_ = s.blobs.Delete(ctx, key)
+		// Crops live in their own namespace (revision-crops/...), so this
+		// rollback can never touch a client input file. A blob that is
+		// already registered (a repeated upload of the same crop) is kept.
+		if _, ferr := s.store.FileByBlobKey(ctx, key); errors.Is(ferr, store.ErrNotFound) {
+			_ = s.blobs.Delete(ctx, key)
+		}
 		status, _, _, ok := workerErr(err)
 		if !ok {
 			return nil, err

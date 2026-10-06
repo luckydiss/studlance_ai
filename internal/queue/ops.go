@@ -439,7 +439,10 @@ func (q *Queue) RecordSnapshotFile(ctx context.Context, jobID, workerID string, 
 	})
 }
 
-// RecordRevisionCrop registers an uploaded remark crop under input/revision-<n>/remarks/.
+// RecordRevisionCrop registers an uploaded remark crop. Crops live in their
+// own namespace — path revision-crops/<n>/<idx>.png, blob
+// jobs/<job_id>/revision-crops/<n>/<idx>.png — so they never share a blob key
+// with the client's input files (02-data.md).
 func (q *Queue) RecordRevisionCrop(ctx context.Context, jobID, workerID string, epoch, n, idx int64, blobKey string, size int64, sha string) error {
 	now := q.clock.Now()
 	return q.fenced(ctx, jobID, workerID, epoch, func(c *sql.Conn, j store.Job) error {
@@ -456,7 +459,7 @@ func (q *Queue) RecordRevisionCrop(ctx context.Context, jobID, workerID string, 
 		if exists == 0 {
 			return &ConflictError{Message: fmt.Sprintf("Замечания %d в доработке %d нет", idx, n)}
 		}
-		path := fmt.Sprintf("input/revision-%d/remarks/%d.png", n, idx)
+		path := fmt.Sprintf("revision-crops/%d/%d.png", n, idx)
 		_, err := c.ExecContext(ctx,
 			"INSERT INTO files (id, job_id, kind, version, path, blob_key, size, sha256, created_at)"+
 				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"+

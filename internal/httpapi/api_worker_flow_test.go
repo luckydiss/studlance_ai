@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -251,7 +252,7 @@ func TestWorkerRevision(t *testing.T) {
 	if code != http.StatusNoContent {
 		t.Fatalf("crop: %d %s", code, b)
 	}
-	if rc, _, err := h.bl.Open(t.Context(), "jobs/"+jobID+"/input/revision-2/remarks/1.png"); err != nil {
+	if rc, _, err := h.bl.Open(t.Context(), "jobs/"+jobID+"/revision-crops/2/1.png"); err != nil {
 		t.Fatalf("crop blob: %v", err)
 	} else {
 		_ = rc.Close()
@@ -266,4 +267,186 @@ func TestWorkerRevision(t *testing.T) {
 	if j.ClientStatus != "done" || j.CurrentVersion != 2 || len(j.Versions) != 2 {
 		t.Fatalf("client: %+v", j)
 	}
+}
+
+// blobString reads a blob written by the API.
+func (h *wkHarness) blobString(t *testing.T, key string) string {
+	t.Helper()
+	rc, _, err := h.bl.Open(t.Context(), key)
+	if err != nil {
+		t.Fatalf("blob %s: %v", key, err)
+	}
+	defer func() { _ = rc.Close() }()
+	b, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// submitJobWithFiles creates a job, uploads the given input files and submits it.
+func (h *wkHarness) submitJobWithFiles(cookie, prompt string, files map[string]string) string {
+	h.t.Helper()
+	code, b := h.creq(http.MethodPost, "/api/client/jobs", cookie, jsonReader(map[string]string{"prompt": prompt}))
+	if code != http.StatusCreated {
+		h.t.Fatalf("create job: %d %s", code, b)
+	}
+	job := decodeAs[tClientJob](h.t, b)
+	for path, content := range files {
+		code, b = h.creq(http.MethodPut, "/api/client/jobs/"+job.ID+"/input?path="+url.QueryEscape(path), cookie, strings.NewReader(content))
+		if code != http.StatusOK {
+			h.t.Fatalf("upload %s: %d %s", path, code, b)
+		}
+	}
+	code, b = h.creq(http.MethodPost, "/api/client/jobs/"+job.ID+"/submit", cookie, nil)
+	if code != http.StatusOK {
+		h.t.Fatalf("submit: %d %s", code, b)
+	}
+	return job.ID
+}
+
+// revisionCropJob drives a job to done, creates a revision with one remark
+// (plus an optional attachment) and claims the revise assignment.
+func revisionCropJob(t *testing.T, h *wkHarness, wtoken, cookie, jobID, attachment string) tAssignment {
+	t.Helper()
+	h.workToDone(wtoken, jobID)
+	j := h.clientJob(cookie, jobID)
+	docID := j.Versions[0].Documents[0].ID
+	files := map[string]string{}
+	if attachment != "" {
+		files["remarks/1.png"] = attachment
+	}
+	body, ct := multipartBody(t, map[string]interface{}{
+		"comment": "Поправьте выводы",
+		"remarks": []map[string]interface{}{{
+			"document_id": docID, "page": 1,
+			"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2,
+			"text": "Добавьте ссылки",
+		}},
+	}, files)
+	code, b := h.creqCT(http.MethodPost, "/api/client/jobs/"+jobID+"/revisions", cookie, ct, body)
+	if code != http.StatusCreated {
+		t.Fatalf("revision: %d %s", code, b)
+	}
+	asn := h.claim(wtoken)
+	if asn.Action != "revise" || asn.Stage != "revise" {
+		t.Fatalf("assignment: %+v", asn)
+	}
+	return asn
+}
+
+// Пункт 2 (третий раунд): вырезка замечания отделена от входных файлов
+// клиента. Приложенный remarks/1.png (и начальный вход с тем же путём) не
+// перезаписывается вырезкой, запись crop и её blob отдельные, повторный и
+// ошибочный upload не трогают входной blob.
+func TestWorkerRevisionCropSeparateFromInput(t *testing.T) {
+	const attachment = "REVISION ATTACHMENT"
+
+	t.Run("revision attachment remarks/1.png", func(t *testing.T) {
+		h := newWorkerHarness(t)
+		wtoken := h.seedWorker("pc-1")
+		cookie := h.seedUserHTTP("c@local", "pw", store.RoleClient)
+		jobID := h.submitJob(cookie, "Реферат по истории")
+		asn := revisionCropJob(t, h, wtoken, cookie, jobID, attachment)
+
+		inputKey := "jobs/" + jobID + "/input/revision-2/remarks/1.png"
+		cropKey := "jobs/" + jobID + "/revision-crops/2/1.png"
+		if got := h.blobString(t, inputKey); got != attachment {
+			t.Fatalf("input blob = %q, want %q", got, attachment)
+		}
+
+		// The crop is uploaded twice (idempotent).
+		for i := 0; i < 2; i++ {
+			code, b := h.wreq(http.MethodPut,
+				fmt.Sprintf("/api/worker/jobs/%s/input/revision/2/remarks/1?epoch=%d", jobID, asn.Epoch),
+				wtoken, strings.NewReader("CROP"))
+			if code != http.StatusNoContent {
+				t.Fatalf("crop #%d: %d %s", i+1, code, b)
+			}
+		}
+		if got := h.blobString(t, cropKey); got != "CROP" {
+			t.Fatalf("crop blob = %q, want CROP", got)
+		}
+		if got := h.blobString(t, inputKey); got != attachment {
+			t.Fatalf("crop upload overwrote the input blob: %q", got)
+		}
+		if got := h.blobString(t, "jobs/"+jobID+"/input/revision-2/remarks/1.png"); got != attachment {
+			t.Fatalf("input blob changed: %q", got)
+		}
+
+		// The input is still served to the worker.
+		code, b := h.wreq(http.MethodGet,
+			fmt.Sprintf("/api/worker/jobs/%s/input/%s?epoch=%d", jobID, urlQueryEscape("revision-2/remarks/1.png"), asn.Epoch),
+			wtoken, nil)
+		if code != http.StatusOK || string(b) != attachment {
+			t.Fatalf("worker input: %d %q", code, b)
+		}
+
+		// The crop row lives in its own namespace.
+		files, err := h.st.FilesByJob(context.Background(), jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var crop, input *store.File
+		for i := range files {
+			f := files[i]
+			switch {
+			case f.Kind == store.FileCrop:
+				cp := f
+				crop = &cp
+			case f.Kind == store.FileInput && f.Path == "input/revision-2/remarks/1.png":
+				ip := f
+				input = &ip
+			}
+		}
+		if crop == nil || crop.Path != "revision-crops/2/1.png" || crop.BlobKey != cropKey {
+			t.Fatalf("crop row = %+v", crop)
+		}
+		if input == nil {
+			t.Fatalf("input row not found: %+v", files)
+		}
+
+		// A failed registration (no such remark) rolls the orphan blob back
+		// and must leave the input blob untouched.
+		code, b = h.wreq(http.MethodPut,
+			fmt.Sprintf("/api/worker/jobs/%s/input/revision/2/remarks/2?epoch=%d", jobID, asn.Epoch),
+			wtoken, strings.NewReader("ORPHAN"))
+		if code != http.StatusConflict {
+			t.Fatalf("crop idx 2: %d %s, want 409", code, b)
+		}
+		if got := h.blobString(t, inputKey); got != attachment {
+			t.Fatalf("failed crop upload damaged the input blob: %q", got)
+		}
+		if _, _, err := h.bl.Open(t.Context(), "jobs/"+jobID+"/revision-crops/2/2.png"); err == nil {
+			t.Fatal("orphan crop blob was not cleaned up")
+		}
+	})
+
+	t.Run("initial input revision-2/remarks/1.png", func(t *testing.T) {
+		h := newWorkerHarness(t)
+		wtoken := h.seedWorker("pc-1")
+		cookie := h.seedUserHTTP("c@local", "pw", store.RoleClient)
+		jobID := h.submitJobWithFiles(cookie, "Реферат по истории", map[string]string{
+			"задание.txt":              "TASK CONTENT",
+			"revision-2/remarks/1.png": "INITIAL INPUT",
+		})
+		asn := revisionCropJob(t, h, wtoken, cookie, jobID, "")
+
+		initialKey := "jobs/" + jobID + "/input/revision-2/remarks/1.png"
+		if got := h.blobString(t, initialKey); got != "INITIAL INPUT" {
+			t.Fatalf("initial input = %q", got)
+		}
+		code, b := h.wreq(http.MethodPut,
+			fmt.Sprintf("/api/worker/jobs/%s/input/revision/2/remarks/1?epoch=%d", jobID, asn.Epoch),
+			wtoken, strings.NewReader("CROP"))
+		if code != http.StatusNoContent {
+			t.Fatalf("crop: %d %s", code, b)
+		}
+		if got := h.blobString(t, initialKey); got != "INITIAL INPUT" {
+			t.Fatalf("crop overwrote the initial input: %q", got)
+		}
+		if got := h.blobString(t, "jobs/"+jobID+"/revision-crops/2/1.png"); got != "CROP" {
+			t.Fatalf("crop blob = %q", got)
+		}
+	})
 }

@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"image"
@@ -28,7 +29,7 @@ type revisionHarness struct {
 	j       *jobExec
 	dir     string
 	mdPath  string
-	remarks string
+	crops   string
 	uploads *sync.Map // path -> []byte
 	got     *atomic.Int32
 }
@@ -99,13 +100,13 @@ func newRevisionHarness(t *testing.T) *revisionHarness {
 		j:       j,
 		dir:     dir,
 		mdPath:  filepath.Join(dir, "REVISION-2.md"),
-		remarks: filepath.Join(dir, "input", "revision-2", "remarks"),
+		crops:   revisionCropsDir(dir, 2),
 		uploads: uploads,
 		got:     got,
 	}
 }
 
-func (h *revisionHarness) cropPath() string { return filepath.Join(h.remarks, "1.png") }
+func (h *revisionHarness) cropPath() string { return filepath.Join(h.crops, "1.png") }
 
 func (h *revisionHarness) readCrop(t *testing.T) []byte {
 	t.Helper()
@@ -140,7 +141,7 @@ func TestPrepareRevisionRestoresMissingCrop(t *testing.T) {
 	}
 	first := h.readCrop(t)
 	md := h.readMD(t)
-	if !strings.Contains(md, "Вырезка: input/revision-2/remarks/1.png") {
+	if !strings.Contains(md, "Вырезка: revision-crops/2/1.png") {
 		t.Fatalf("REVISION-2.md has no crop link:\n%s", md)
 	}
 	if h.got.Load() == 0 {
@@ -158,7 +159,7 @@ func TestPrepareRevisionRestoresMissingCrop(t *testing.T) {
 	if string(first) != string(second) {
 		t.Fatal("restored crop differs from the original one")
 	}
-	if md2 := h.readMD(t); !strings.Contains(md2, "Вырезка: input/revision-2/remarks/1.png") {
+	if md2 := h.readMD(t); !strings.Contains(md2, "Вырезка: revision-crops/2/1.png") {
 		t.Fatalf("REVISION-2.md lost the crop link after the restore:\n%s", md2)
 	}
 	if h.got.Load() < 2 {
@@ -175,8 +176,8 @@ func TestPrepareRevisionRebuildsInterruptedPreparation(t *testing.T) {
 
 	// A stale REVISION-2.md with a link and a truncated PNG on disk: exactly
 	// what an interrupted preparation leaves behind.
-	stale := "# Доработка — версия 2\n\n1. «x» — y (out/чертёж.cdw), стр. 1. Вырезка: input/revision-2/remarks/1.png\n"
-	if err := os.MkdirAll(h.remarks, 0o755); err != nil {
+	stale := "# Доработка — версия 2\n\n1. «x» — y (out/чертёж.cdw), стр. 1. Вырезка: revision-crops/2/1.png\n"
+	if err := os.MkdirAll(h.crops, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(h.mdPath, []byte(stale), 0o644); err != nil {
@@ -191,7 +192,7 @@ func TestPrepareRevisionRebuildsInterruptedPreparation(t *testing.T) {
 		t.Fatalf("prepareRevision: %v", err)
 	}
 	h.readCrop(t) // must be a real PNG again
-	if md := h.readMD(t); !strings.Contains(md, "Вырезка: input/revision-2/remarks/1.png") {
+	if md := h.readMD(t); !strings.Contains(md, "Вырезка: revision-crops/2/1.png") {
 		t.Fatalf("rebuilt crop is not referenced:\n%s", md)
 	}
 
@@ -221,6 +222,114 @@ func TestPrepareRevisionRebuildsInterruptedPreparation(t *testing.T) {
 	}
 }
 
+// Пункт 2 (третий раунд): вырезки отделены от входных файлов. Вложение
+// клиента с именем remarks/1.png остаётся в input и не перезаписывается
+// вырезкой; вырезка лежит в revision-crops/2/1.png.
+func TestPrepareRevisionKeepsInputAttachment(t *testing.T) {
+	plain := []byte("клиентское вложение, не вырезка")
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			img.Set(x, y, color.RGBA{R: 200, G: 10, B: 10, A: 255})
+		}
+	}
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, img); err != nil {
+		t.Fatal(err)
+	}
+	validPNG := pngBuf.Bytes()
+
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"arbitrary bytes", plain},
+		{"valid different png", validPNG},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRevisionHarness(t)
+			ctx := context.Background()
+			h.j.asn.Revision.Files = []httpapi.RevisionFile{{Path: "revision-2/remarks/1.png"}}
+			inputPath := filepath.Join(h.dir, "input", "revision-2", "remarks", "1.png")
+			if err := os.MkdirAll(filepath.Dir(inputPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(inputPath, tc.data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			for run := 1; run <= 3; run++ {
+				if err := h.j.prepareRevision(ctx); err != nil {
+					t.Fatalf("prepareRevision #%d: %v", run, err)
+				}
+				got, err := os.ReadFile(inputPath)
+				if err != nil {
+					t.Fatalf("input attachment disappeared on run %d: %v", run, err)
+				}
+				if !bytes.Equal(got, tc.data) {
+					t.Fatalf("input attachment changed on run %d: %q", run, got)
+				}
+				crop := h.readCrop(t)
+				if bytes.Equal(crop, tc.data) {
+					t.Fatal("the crop is the input attachment: namespaces are not separated")
+				}
+				md := h.readMD(t)
+				if !strings.Contains(md, "Вырезка: revision-crops/2/1.png") {
+					t.Fatalf("run %d: REVISION-2.md has no crop link:\n%s", run, md)
+				}
+				if !strings.Contains(md, "- input/revision-2/remarks/1.png") {
+					t.Fatalf("run %d: REVISION-2.md lost the attachment reference:\n%s", run, md)
+				}
+				if strings.Contains(md, "Вырезка: input/") {
+					t.Fatalf("run %d: the crop link points into input/:\n%s", run, md)
+				}
+			}
+
+			// Deleting the crop restores it without touching the attachment.
+			if err := os.Remove(h.cropPath()); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.j.prepareRevision(ctx); err != nil {
+				t.Fatal(err)
+			}
+			h.readCrop(t)
+			got, err := os.ReadFile(inputPath)
+			if err != nil {
+				t.Fatalf("input attachment disappeared after restore: %v", err)
+			}
+			if !bytes.Equal(got, tc.data) {
+				t.Fatalf("input attachment changed after restore: %q", got)
+			}
+		})
+	}
+}
+
+// Пункт 2 (третий раунд): начальный вход input/revision-2/remarks/1.png не
+// считается готовой вырезкой — вырезка строится отдельно, вход не трогается.
+func TestPrepareRevisionInitialInputNotACrop(t *testing.T) {
+	h := newRevisionHarness(t)
+	ctx := context.Background()
+	initial := filepath.Join(h.dir, "input", "revision-2", "remarks", "1.png")
+	if err := os.MkdirAll(filepath.Dir(initial), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Invalid PNG on purpose: a stale input must not be treated as a ready
+	// crop, so the crop is rebuilt next to it.
+	if err := os.WriteFile(initial, []byte("not a png at all"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.j.prepareRevision(ctx); err != nil {
+		t.Fatal(err)
+	}
+	crop := h.readCrop(t)
+	if strings.Contains(string(crop), "not a png") {
+		t.Fatal("the crop was taken from the input file")
+	}
+	if got, err := os.ReadFile(initial); err != nil || string(got) != "not a png at all" {
+		t.Fatalf("initial input changed: %q %v", got, err)
+	}
+}
+
 // Пункт 7 (второй раунд): continue/answer повторяет подготовку идемпотентно:
 // те же имена, те же байты, атомарная запись без временных файлов.
 func TestPrepareRevisionIdempotentOnContinue(t *testing.T) {
@@ -246,7 +355,7 @@ func TestPrepareRevisionIdempotentOnContinue(t *testing.T) {
 	if n := strings.Count(md1, "Вырезка:"); n != 1 {
 		t.Fatalf("crop links = %d, want 1", n)
 	}
-	entries, err := os.ReadDir(h.remarks)
+	entries, err := os.ReadDir(h.crops)
 	if err != nil {
 		t.Fatal(err)
 	}
