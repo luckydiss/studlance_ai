@@ -104,6 +104,9 @@ func (j *jobExec) downloadInput(ctx context.Context, f httpapi.WorkerInputFile) 
 	// downloaded again); stale lease and other 4xx are not retried.
 	backoff := 2 * time.Second
 	for {
+		if j.cancelRequested.Load() {
+			return errCanceled
+		}
 		tmp, err := os.CreateTemp(filepath.Dir(dst), ".dl-*")
 		if err != nil {
 			return err

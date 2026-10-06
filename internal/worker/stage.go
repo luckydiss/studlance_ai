@@ -31,12 +31,21 @@ func agentForStage(stage string) string {
 func (j *jobExec) runStage(ctx, agentCtx context.Context, stage, action string) stageResult {
 	agent := agentForStage(stage)
 
+	// A cancellation confirmed before the stage must not start any new work:
+	// no revision preparation, no uploads, no agent process.
+	if j.cancelRequested.Load() {
+		return stageResult{outcome: outcomeCanceled}
+	}
+
 	// Revision prep runs on any revise-stage action (revise, but also a
 	// continue/answer after a crash mid-prep) and is idempotent.
 	if stage == "revise" {
 		if err := j.prepareRevision(ctx); err != nil {
 			if isStale(err) {
 				return stageResult{outcome: outcomeAborted}
+			}
+			if errors.Is(err, errCanceled) {
+				return stageResult{outcome: outcomeCanceled}
 			}
 			return stageResult{outcome: outcomeFailed, errText: "не удалось подготовить доработку: " + err.Error()}
 		}

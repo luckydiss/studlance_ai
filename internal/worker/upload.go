@@ -17,8 +17,21 @@ var uploadBackoffInitial = 2 * time.Second
 // is not retryable (4xx, stale lease) or ctx is done. Network errors and 5xx
 // are retried with a 2→4→…→60 s backoff.
 func (j *jobExec) putWithRetry(ctx context.Context, localPath string, put func(r io.Reader) error) error {
+	return j.putLoop(ctx, localPath, put, false)
+}
+
+// putWithRetryStop is putWithRetry that also aborts as soon as a client
+// cancellation is known: no further upload and no more retries after that.
+func (j *jobExec) putWithRetryStop(ctx context.Context, localPath string, put func(r io.Reader) error) error {
+	return j.putLoop(ctx, localPath, put, true)
+}
+
+func (j *jobExec) putLoop(ctx context.Context, localPath string, put func(r io.Reader) error, stopOnCancel bool) error {
 	backoff := uploadBackoffInitial
 	for {
+		if stopOnCancel && j.cancelRequested.Load() {
+			return errCanceled
+		}
 		f, err := os.Open(localPath)
 		if err != nil {
 			return err
@@ -28,9 +41,15 @@ func (j *jobExec) putWithRetry(ctx context.Context, localPath string, put func(r
 		if err == nil || !client.IsRetryable(err) || ctx.Err() != nil {
 			return err
 		}
+		if stopOnCancel && j.cancelRequested.Load() {
+			return errCanceled
+		}
 		j.log.Error("upload failed, retrying", "path", localPath, "err", err)
 		if !sleepCtx(ctx, backoff) {
 			return err
+		}
+		if stopOnCancel && j.cancelRequested.Load() {
+			return errCanceled
 		}
 		if backoff < 60*time.Second {
 			backoff *= 2

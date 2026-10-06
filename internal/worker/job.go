@@ -65,9 +65,17 @@ func (w *Worker) executeJob(ctx context.Context, asn *httpapi.Assignment) {
 func (j *jobExec) run(ctx context.Context) {
 	if err := j.prepare(ctx); err != nil {
 		j.log.Error("prepare failed", "err", err)
-		if !isStale(err) && ctx.Err() == nil {
-			j.finish(ctx, httpapi.FinishRequestOutcomeFailed, nil, "не удалось подготовить папку заказа: "+err.Error())
+		if isStale(err) {
+			return
 		}
+		if ctx.Err() != nil {
+			return
+		}
+		if errors.Is(err, errCanceled) {
+			j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
+			return
+		}
+		j.finish(ctx, httpapi.FinishRequestOutcomeFailed, nil, "не удалось подготовить папку заказа: "+err.Error())
 		return
 	}
 
@@ -128,20 +136,26 @@ func (j *jobExec) run(ctx context.Context) {
 			j.log.Info("draft committed, starting verify")
 		case "verify":
 			v := 1
-			if !j.commitVersion(ctx, v, "draft") || j.cancelRequested.Load() {
+			if !j.commitVersion(ctx, v, "draft") {
+				return // already finished (canceled or failed)
+			}
+			if j.cancelRequested.Load() {
 				j.finishCanceledIfRequested(ctx)
 				return
 			}
-			j.finish(ctx, httpapi.FinishRequestOutcomeOk, &v, "")
+			j.finishOk(ctx, &v)
 			return
 		case "revise":
 			v := j.asn.Version
 			prev := fmt.Sprintf("v%d", v-1)
-			if !j.commitVersion(ctx, v, prev) || j.cancelRequested.Load() {
+			if !j.commitVersion(ctx, v, prev) {
+				return // already finished (canceled or failed)
+			}
+			if j.cancelRequested.Load() {
 				j.finishCanceledIfRequested(ctx)
 				return
 			}
-			j.finish(ctx, httpapi.FinishRequestOutcomeOk, &v, "")
+			j.finishOk(ctx, &v)
 			return
 		default:
 			j.log.Error("unknown stage", "stage", j.stage)
@@ -150,11 +164,29 @@ func (j *jobExec) run(ctx context.Context) {
 	}
 }
 
+// errCanceled marks work stopped because the client canceled the order: no
+// further preparation, upload or commit may happen after it is known.
+var errCanceled = errors.New("отменено")
+
 // finishCanceledIfRequested reports canceled when the flag is set.
 func (j *jobExec) finishCanceledIfRequested(ctx context.Context) {
 	if j.cancelRequested.Load() && !j.stale.Load() {
 		j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
 	}
+}
+
+// finishOk reports success unless the order was canceled in the meantime (the
+// cancel flag always wins over a successful commit) or the lease was lost
+// (then there is nothing to report).
+func (j *jobExec) finishOk(ctx context.Context, version *int) {
+	if j.stale.Load() {
+		return
+	}
+	if j.cancelRequested.Load() {
+		j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
+		return
+	}
+	j.finish(ctx, httpapi.FinishRequestOutcomeOk, version, "")
 }
 
 // heartbeatLoop extends the lease and watches for cancellation and fencing.

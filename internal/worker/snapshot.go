@@ -72,6 +72,9 @@ func (j *jobExec) readManifest() (manifest, error) {
 
 // commitDraft snapshots and commits the draft, advancing the stage to verify.
 func (j *jobExec) commitDraft(ctx context.Context) bool {
+	if j.cancelRequested.Load() {
+		return j.commitFailed(ctx, errCanceled)
+	}
 	title := summaryTitle(filepath.Join(j.dir, "SUMMARY.md"))
 	if err := j.snapshot(ctx, "draft", "", title, nil); err != nil {
 		return j.commitFailed(ctx, err)
@@ -82,6 +85,9 @@ func (j *jobExec) commitDraft(ctx context.Context) bool {
 // commitVersion snapshots and commits version n, diffed against prevSnap
 // ("draft" for v1, "v<n-1>" otherwise), with verification.json attached.
 func (j *jobExec) commitVersion(ctx context.Context, n int, prevSnap string) bool {
+	if j.cancelRequested.Load() {
+		return j.commitFailed(ctx, errCanceled)
+	}
 	var ver *httpapi.Verification
 	if raw, err := os.ReadFile(filepath.Join(j.dir, "verification.json")); err == nil {
 		var v httpapi.Verification
@@ -97,6 +103,15 @@ func (j *jobExec) commitVersion(ctx context.Context, n int, prevSnap string) boo
 
 // commitFailed maps a snapshot/commit error to a stage failure or an abort.
 func (j *jobExec) commitFailed(ctx context.Context, err error) bool {
+	if errors.Is(err, errCanceled) {
+		// The order was canceled while the snapshot was being prepared or
+		// uploaded: the commit must not happen. Report canceled on the job
+		// context (the stage context is already canceled by the heartbeat).
+		if !j.stale.Load() && ctx.Err() == nil {
+			j.finish(ctx, httpapi.FinishRequestOutcomeCanceled, nil, "")
+		}
+		return false
+	}
 	if isStale(err) || isConflict(err) {
 		j.log.Error("commit lost lease", "err", err)
 		return false
@@ -110,7 +125,12 @@ func (j *jobExec) commitFailed(ctx context.Context, err error) bool {
 }
 
 // snapshot builds, uploads and commits one snapshot (05-worker.md «Снимок версии»).
+// The cancellation flag is re-checked right before the commit: a cancel that
+// arrived during the uploads must never turn into a commit.
 func (j *jobExec) snapshot(ctx context.Context, name, prevName, title string, ver *httpapi.Verification) error {
+	if j.cancelRequested.Load() {
+		return errCanceled
+	}
 	m, err := j.readManifest()
 	if err != nil {
 		return err
@@ -188,12 +208,20 @@ func (j *jobExec) snapshot(ctx context.Context, name, prevName, title string, ve
 	if title != "" {
 		req.Title = &title
 	}
+	// The last check before the commit: any cancellation known at this point
+	// (including one that arrived during the uploads) forbids it.
+	if j.cancelRequested.Load() {
+		return errCanceled
+	}
 	return j.w.cl.CommitSnapshot(ctx, j.asn.JobId, name, req)
 }
 
 // snapshotDoc renders and uploads one document's preview, pages and thumbs,
 // and builds its commit entry.
 func (j *jobExec) snapshotDoc(ctx context.Context, snapDir, snapName, prevName string, prevInfo snapshotInfo, idx int, d manifestDoc) (httpapi.SnapshotDocument, snapshotInfoDoc, error) {
+	if j.cancelRequested.Load() {
+		return httpapi.SnapshotDocument{}, snapshotInfoDoc{}, errCanceled
+	}
 	rel := strings.TrimPrefix(d.File, "out/")
 	srcPath := filepath.Join(snapDir, "out", filepath.FromSlash(rel))
 
@@ -263,6 +291,11 @@ func (j *jobExec) snapshotDoc(ctx context.Context, snapDir, snapName, prevName s
 // docPreviewPDF returns the PDF to render for a document and the preview_path
 // to commit ("" when the document itself is the PDF or no preview exists).
 func (j *jobExec) docPreviewPDF(ctx context.Context, snapDir, srcPath, rel string, d manifestDoc) (pdfPath, previewRel string) {
+	// A conversion started after a known cancellation would be wasted work
+	// (and must not upload anything).
+	if j.cancelRequested.Load() {
+		return "", ""
+	}
 	if d.Preview != "" {
 		p := filepath.Join(snapDir, filepath.FromSlash(d.Preview))
 		if _, err := os.Stat(p); err == nil {
@@ -362,13 +395,13 @@ func diffWithPrev(prevName, snapshotsDir string, prevIdx, idx, pageNo int, curPa
 // ---------- small helpers ----------
 
 func (j *jobExec) uploadFile(ctx context.Context, snap, rel, localPath string) error {
-	return j.putWithRetry(ctx, localPath, func(r io.Reader) error {
+	return j.putWithRetryStop(ctx, localPath, func(r io.Reader) error {
 		return j.w.cl.PutSnapshotFile(ctx, j.asn.JobId, snap, j.asn.Epoch, rel, r)
 	})
 }
 
 func (j *jobExec) uploadReader(ctx context.Context, snap, kind string, idx, page int, localPath string) error {
-	return j.putWithRetry(ctx, localPath, func(r io.Reader) error {
+	return j.putWithRetryStop(ctx, localPath, func(r io.Reader) error {
 		if kind == "page" {
 			return j.w.cl.PutSnapshotPage(ctx, j.asn.JobId, snap, j.asn.Epoch, idx, page, r)
 		}

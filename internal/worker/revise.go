@@ -104,7 +104,7 @@ func (j *jobExec) cropRemark(prevDir string, prevInfo snapshotInfo, remarksDir s
 }
 
 func (j *jobExec) uploadCrop(ctx context.Context, n, idx int, path string) error {
-	return j.putWithRetry(ctx, path, func(r io.Reader) error {
+	return j.putWithRetryStop(ctx, path, func(r io.Reader) error {
 		return j.w.cl.PutRevisionRemark(ctx, j.asn.JobId, j.asn.Epoch, n, idx, r)
 	})
 }
