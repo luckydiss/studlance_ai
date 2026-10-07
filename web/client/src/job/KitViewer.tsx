@@ -3,6 +3,9 @@ import {
   type JobDetail,
   type Remark,
   api,
+  isCurrentSession,
+  runInSession,
+  sessionGeneration,
   setJobCache,
   throwApiError,
   useCurrentUser,
@@ -127,27 +130,40 @@ export function KitViewer({ detail }: { detail: JobDetail }) {
       ? remarks.map((remark) => ({ key: `draft-${remark.idx}`, remark, draft: true }))
       : [];
   const visibleRemarks = [...history, ...drafts];
+  const revisionGeneration = useRef(0);
   const revision = useMutation({
     mutationFn: async () => {
-      const form = new FormData();
-      form.append(
-        "data",
-        JSON.stringify({
-          comment: comment.trim(),
-          remarks: remarks.map(({ idx: _idx, ...remark }) => remark),
-        }),
-      );
-      for (const file of files) form.append("files", file.file, file.path);
-      const response = await fetch(`/api/client/jobs/${encodeURIComponent(detail.id)}/revisions`, {
-        method: "POST",
-        credentials: "same-origin",
-        body: form,
-      });
-      await throwApiError(response);
-      return (await response.json()) as JobDetail;
+      // The session instance is captured at request start: a late response
+      // of an old session must not touch the current form or caches.
+      revisionGeneration.current = sessionGeneration();
+      const generation = revisionGeneration.current;
+      return runInSession(async () => {
+        const form = new FormData();
+        form.append(
+          "data",
+          JSON.stringify({
+            comment: comment.trim(),
+            remarks: remarks.map(({ idx: _idx, ...remark }) => remark),
+          }),
+        );
+        for (const file of files) form.append("files", file.file, file.path);
+        const response = await fetch(
+          `/api/client/jobs/${encodeURIComponent(detail.id)}/revisions`,
+          {
+            method: "POST",
+            credentials: "same-origin",
+            body: form,
+          },
+        );
+        await throwApiError(response);
+        return (await response.json()) as JobDetail;
+      }, generation);
     },
     onSuccess: (data) => {
-      setJobCache(client, sessionUser?.id, detail.id, data);
+      if (!isCurrentSession(revisionGeneration.current)) {
+        return;
+      }
+      setJobCache(client, sessionUser?.id, detail.id, data, revisionGeneration.current);
       setMode(false);
       setRemarks([]);
       setComment("");

@@ -24,7 +24,12 @@ export { ApiError, apiErrorMessage, apiErrorStatus, throwApiError } from "./erro
 export { ToastProvider, useToast, useApiErrorToast } from "./toast";
 export {
   expireSession,
+  isCurrentSession,
   isSessionExpired,
+  isStaleSession,
+  runInSession,
+  sessionGeneration,
+  tagSessionError,
   useCurrentUser,
   useLogin,
   useLogout,

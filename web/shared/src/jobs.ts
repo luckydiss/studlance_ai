@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { components } from "./api/types.gen";
+import { isCurrentSession } from "./auth";
 
 // Shared query keys and cache helpers for job data (07-web-client.md).
 // The JobDetail cache is fed by both the REST query and the SSE stream
@@ -31,15 +32,21 @@ export function jobsListQueryKey(userId: string | null | undefined) {
  * Replaces the cached job detail (used by the SSE snapshot/job events and
  * mutation callbacks). `userId` is the session the data belongs to: writes
  * for an old session land in that session's key and never leak into the
- * current view.
+ * current view. `generation`, when provided, is the session instance the
+ * data came from: a stale generation (e.g. a late mutation response after a
+ * re-login) is ignored entirely.
  */
 export function setJobCache(
   queryClient: QueryClient,
   userId: string | null | undefined,
   jobId: string,
   detail: JobDetail,
+  generation?: number,
 ) {
   if (detail.id !== jobId) {
+    return;
+  }
+  if (generation !== undefined && !isCurrentSession(generation)) {
     return;
   }
   queryClient.setQueryData(jobQueryKey(userId, jobId), detail);

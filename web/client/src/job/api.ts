@@ -2,6 +2,7 @@ import {
   apiErrorMessage,
   apiErrorStatus,
   expireSession,
+  isStaleSession,
   jobQueryKey,
   jobsListQueryKey,
   useApiErrorToast,
@@ -24,6 +25,12 @@ export function useJobError() {
   const queryClient = useQueryClient();
   return useCallback(
     (error: unknown) => {
+      // A late error of an old session instance is ignored entirely: no
+      // toast, no navigation, no session expiry (the central handler has
+      // already skipped it for the same reason).
+      if (isStaleSession(error)) {
+        return;
+      }
       if (apiErrorStatus(error) === 401) {
         // The session is gone: end it locally (me=null, private caches and
         // subscriptions dropped) and open the login form with the current

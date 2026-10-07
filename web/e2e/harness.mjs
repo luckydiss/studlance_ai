@@ -23,6 +23,7 @@ export const testUsers = {
     password: "stranger-password-3",
     name: "Другой Клиент",
   },
+  admin: { email: "admin@example.com", password: "admin-password-123", name: "Админ Тестовый" },
 };
 
 function goBin() {
@@ -151,7 +152,7 @@ export async function startHarness() {
         "--email",
         u.email,
         "--role",
-        "client",
+        u.email === testUsers.admin.email ? "admin" : "client",
         "--name",
         u.name,
         "--password-stdin",
@@ -218,12 +219,30 @@ export async function startHarness() {
   worker.stdout.on("data", (d) => process.env.E2E_VERBOSE && process.stdout.write(`[worker] ${d}`));
   worker.stderr.on("data", (d) => process.env.E2E_VERBOSE && process.stderr.write(`[worker] ${d}`));
 
+  // An admin session cookie for test assertions (lease_epoch etc.) — the
+  // login goes over HTTP like a browser.
+  const adminLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: testUsers.admin.email,
+      password: testUsers.admin.password,
+    }),
+  });
+  if (!adminLogin.ok) {
+    throw new Error("harness: admin login failed");
+  }
+  const adminCookie =
+    /sl_session=[^;]+/.exec(adminLogin.headers.get("set-cookie") ?? "")?.[0] ?? "";
+
   return {
     baseUrl,
     tmp,
     dataDir,
     server,
     worker,
+    workerToken: token,
+    adminCookie,
     async stop() {
       killTree(worker);
       killTree(server);

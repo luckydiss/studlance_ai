@@ -118,9 +118,16 @@ async function compare(page, urlA, urlB, { mount = false, labelA = "", labelB = 
         out.appendChild(side);
         out.appendChild(diff);
       }
+      const sizesMatch = imgA.width === imgB.width && imgA.height === imgB.height;
+      // Equality requires both a zero pixel diff AND matching source
+      // dimensions: a zero color diff over different sizes (e.g. white
+      // images with a white tail) is still a mismatch.
+      const equal = changed === 0 && sizesMatch;
       return {
         changed,
         total: w * h,
+        sizesMatch,
+        equal,
         widthA: imgA.width,
         heightA: imgA.height,
         widthB: imgB.width,
@@ -151,21 +158,47 @@ async function selfCheck(page) {
   const red = await synthetic(page, 64, 48, [200, 30, 30]);
   const redAgain = await synthetic(page, 64, 48, [200, 30, 30]);
   const blue = await synthetic(page, 64, 48, [30, 30, 200]);
-  const redBigger = await synthetic(page, 72, 48, [200, 30, 30]);
+  const white = await synthetic(page, 64, 48, [255, 255, 255]);
+  const whiteWider = await synthetic(page, 72, 48, [255, 255, 255]);
+  const whiteTaller = await synthetic(page, 64, 56, [255, 255, 255]);
+  const redWider = await synthetic(page, 72, 48, [200, 30, 30]);
 
   const same = await compare(page, red, redAgain);
-  if (same.changed !== 0) {
-    throw new Error(`self-check failed: identical images -> ${same.changed}`);
+  if (!same.equal || same.changed !== 0) {
+    throw new Error(`self-check failed: identical images -> ${same.changed}, equal=${same.equal}`);
   }
   const differs = await compare(page, red, blue);
-  if (differs.changed !== differs.total || differs.changed === 0) {
+  if (differs.equal || differs.changed !== differs.total || differs.changed === 0) {
     throw new Error(`self-check failed: different images -> ${differs.changed}/${differs.total}`);
   }
-  const sizes = await compare(page, red, redBigger);
-  if (sizes.changed === 0) {
-    throw new Error("self-check failed: different sizes produced a false zero");
+  // White images of different sizes: the color diff over the union is zero,
+  // but the comparison must still report a mismatch (no false equality).
+  const whiteWidth = await compare(page, white, whiteWider);
+  if (whiteWidth.equal) {
+    throw new Error("self-check failed: white width mismatch reported equal");
   }
-  return { same: same.changed, different: differs.changed, sizeMismatch: sizes.changed };
+  if (whiteWidth.sizesMatch) {
+    throw new Error("self-check failed: white width mismatch not detected");
+  }
+  const whiteHeight = await compare(page, white, whiteTaller);
+  if (whiteHeight.equal) {
+    throw new Error("self-check failed: white height mismatch reported equal");
+  }
+  if (whiteHeight.sizesMatch) {
+    throw new Error("self-check failed: white height mismatch not detected");
+  }
+  // Colored size mismatch keeps a nonzero pixel diff too.
+  const colored = await compare(page, red, redWider);
+  if (colored.equal || colored.changed === 0) {
+    throw new Error("self-check failed: colored size mismatch produced a zero diff");
+  }
+  return {
+    same: { changed: same.changed, equal: same.equal },
+    different: differs.changed,
+    whiteWidthMismatch: { changed: whiteWidth.changed, equal: whiteWidth.equal },
+    whiteHeightMismatch: { changed: whiteHeight.changed, equal: whiteHeight.equal },
+    coloredSizeMismatch: colored.changed,
+  };
 }
 
 async function toDataUrl(file) {
@@ -245,11 +278,23 @@ async function main() {
           img.addEventListener("error", hide);
         }
       }
-      // Snapshot fixation: stop the CSS animation at its start state and
-      // drop the transform so both sides rasterize text the same way.
+      // Snapshot fixation: stop every sl-swipe/segN animation (the track AND
+      // the progress-bar fills) at their start state and drop the transform,
+      // so both sides show stage 1 with progress 0. Only the render wrapper
+      // is touched; the mockup file is not modified.
       const track = document.querySelector("div[style*='sl-swipe']");
       track.style.animation = "none";
       track.style.transform = "none";
+      // The progress-bar fills (seg1..seg5) also carry .sl-anim: stop them at
+      // their base scaleX(0). The track itself is excluded — scaleX(0) would
+      // collapse it.
+      for (const anim of Array.from(document.querySelectorAll(".sl-anim"))) {
+        if (anim === track || anim.getBoundingClientRect().width > 1000) {
+          continue;
+        }
+        anim.style.animation = "none";
+        anim.style.transform = "scaleX(0)";
+      }
     });
     await fontsSettled(page);
     await page.waitForTimeout(400);
@@ -265,8 +310,15 @@ async function main() {
     await work.locator("#sideBySide").screenshot({ path: path.join(outDir, "compare.png") });
     await work.locator("#heatmap").screenshot({ path: path.join(outDir, "diff.png") });
     const summary = {
-      ...stats,
+      changed: stats.changed,
+      total: stats.total,
       percent: Number(((stats.changed / stats.total) * 100).toFixed(3)),
+      sizesMatch: stats.sizesMatch,
+      equal: stats.equal,
+      widthA: stats.widthA,
+      heightA: stats.heightA,
+      widthB: stats.widthB,
+      heightB: stats.heightB,
     };
     await writeFile(path.join(outDir, "stats.json"), JSON.stringify(summary, null, 2), "utf8");
     console.log("comparison stats:", JSON.stringify(summary));

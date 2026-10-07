@@ -6,7 +6,10 @@ import {
   bundleUrl,
   formatDate,
   formatOrderDate,
+  isCurrentSession,
   jobQueryKey,
+  runInSession,
+  sessionGeneration,
   setJobCache,
   useCurrentUser,
   useJobStream,
@@ -30,8 +33,10 @@ export function JobPage() {
   const query = useQuery({
     queryKey: jobQueryKey(user?.id, id),
     enabled: user !== null && user !== undefined,
-    queryFn: async () =>
-      requireData(await api.GET("/api/client/jobs/{id}", { params: { path: { id } } })),
+    queryFn: () =>
+      runInSession(async () =>
+        requireData(await api.GET("/api/client/jobs/{id}", { params: { path: { id } } })),
+      ),
     retry: (count, error) =>
       apiErrorStatus(error) !== 404 && apiErrorStatus(error) !== 401 && count < 2,
   });
@@ -80,29 +85,53 @@ function JobContent({ detail, user }: { detail: JobDetail; user: CurrentUser | n
   const client = useQueryClient();
   const invalidate = useInvalidateJob(user?.id, detail.id);
   const onError = useJobError();
+  const cancelGeneration = useRef(0);
   const cancel = useMutation({
-    mutationFn: async () =>
-      requireData(
-        await api.POST("/api/client/jobs/{id}/cancel", { params: { path: { id: detail.id } } }),
-      ),
+    mutationFn: async () => {
+      // Capture the session instance at request start: a late response of an
+      // old session must not touch the current one.
+      cancelGeneration.current = sessionGeneration();
+      return runInSession(
+        async () =>
+          requireData(
+            await api.POST("/api/client/jobs/{id}/cancel", {
+              params: { path: { id: detail.id } },
+            }),
+          ),
+        cancelGeneration.current,
+      );
+    },
     onSuccess: (data) => {
+      if (!isCurrentSession(cancelGeneration.current)) {
+        return;
+      }
       setConfirming(false);
-      setJobCache(client, user?.id, detail.id, data);
+      setJobCache(client, user?.id, detail.id, data, cancelGeneration.current);
       void invalidate();
     },
     onError,
   });
+  const replyGeneration = useRef(0);
   const reply = useMutation({
-    mutationFn: async () =>
-      requireData(
-        await api.POST("/api/client/jobs/{id}/answer", {
-          params: { path: { id: detail.id } },
-          body: { text: answer.trim() },
-        }),
-      ),
+    mutationFn: async () => {
+      replyGeneration.current = sessionGeneration();
+      return runInSession(
+        async () =>
+          requireData(
+            await api.POST("/api/client/jobs/{id}/answer", {
+              params: { path: { id: detail.id } },
+              body: { text: answer.trim() },
+            }),
+          ),
+        replyGeneration.current,
+      );
+    },
     onSuccess: (data) => {
+      if (!isCurrentSession(replyGeneration.current)) {
+        return;
+      }
       setAnswer("");
-      setJobCache(client, user?.id, detail.id, data);
+      setJobCache(client, user?.id, detail.id, data, replyGeneration.current);
       void invalidate();
     },
     onError,

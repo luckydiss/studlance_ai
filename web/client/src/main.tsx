@@ -2,7 +2,7 @@ import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@ta
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@studlance/shared/theme.css";
-import { ToastProvider, apiErrorStatus, expireSession } from "@studlance/shared";
+import { ToastProvider, apiErrorStatus, expireSession, isStaleSession } from "@studlance/shared";
 import { App } from "./App";
 
 const rootEl = document.getElementById("root");
@@ -14,8 +14,14 @@ if (!rootEl) {
 // me becomes null (so a stale cached 200 cannot push the user off the login
 // form), private caches are dropped and in-flight requests cancelled. The
 // auth gate then routes to /login with the current path as `next`. Plain
-// network errors stay on the page with their retry UI.
+// network errors stay on the page with their retry UI. Errors of an old
+// session instance (a late 401 delivered after a re-login) are ignored: they
+// carry the generation captured at request start and must not expire or
+// redirect the current session.
 const onCacheError = (error: unknown) => {
+  if (isStaleSession(error)) {
+    return;
+  }
   if (apiErrorStatus(error) === 401) {
     expireSession(queryClient);
   }

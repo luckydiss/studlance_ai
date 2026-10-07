@@ -3,8 +3,11 @@ import {
   api,
   apiErrorMessage,
   expireSession,
+  isCurrentSession,
   jobsListQueryKey,
   plural,
+  sessionGeneration,
+  tagSessionError,
   useCurrentUser,
   useToast,
 } from "@studlance/shared";
@@ -119,12 +122,21 @@ export function OrderForm() {
     locked.current = true;
     setBusy(true);
     setMenuOpen(false);
+    // The whole create→upload→submit flow belongs to the session instance it
+    // started in: after a session switch (expiry, logout, another login) its
+    // late results and errors are ignored before any side effect — no cache
+    // writes, no navigation, no session expiry, no toasts, no form resets.
+    const generation = sessionGeneration();
+    const isMine = () => isCurrentSession(generation);
+    const guardError = (error: unknown) => tagSessionError(error, generation);
     try {
       if (!jobId.current) {
         const { data, error, response } = await api.POST("/api/client/jobs", {
           body: { prompt: prompt.trim() },
         });
-        if (error) throw new ApiError(response.status, error.error.code, error.error.message);
+        if (error)
+          throw guardError(new ApiError(response.status, error.error.code, error.error.message));
+        if (!isMine()) return;
         jobId.current = data.id;
         pending.current = [...selected.current];
         totalBytes.current = selected.current.reduce((sum, entry) => sum + entry.file.size, 0);
@@ -133,21 +145,24 @@ export function OrderForm() {
       if (pending.current.length > 0) {
         setUploading(true);
         const outcome = await runUploads(id, pending.current, {
-          onProgress: (progress) =>
+          onProgress: (progress) => {
+            if (!isMine()) return;
             setPercent(
               progressPercent({
                 ...progress,
                 doneBytes: completedBytes.current + progress.doneBytes,
                 totalBytes: totalBytes.current,
               }),
-            ),
+            );
+          },
           fetchImpl: async (input, init) => {
             const response = await fetch(input, init);
-            if (response.status === 401)
+            if (response.status === 401 && isMine())
               navigate(`/login?next=${encodeURIComponent(`/orders/${id}`)}`, { replace: true });
             return response;
           },
         });
+        if (!isMine()) return;
         completedBytes.current += outcome.succeeded.reduce(
           (sum, entry) => sum + entry.file.size,
           0,
@@ -156,21 +171,28 @@ export function OrderForm() {
         if (outcome.failed.length > 0) {
           for (const failure of outcome.failures) {
             // Preserve server errors, including 413, alongside the retry instruction.
-            show(failure.message);
+            if (failure.message) show(failure.message);
             show(`Не удалось загрузить ${failure.name}. Попробуйте ещё раз`);
           }
           setRetry(true);
           return;
         }
       }
+      if (!isMine()) return;
       setUploading(false);
       const { error, response } = await api.POST("/api/client/jobs/{id}/submit", {
         params: { path: { id } },
       });
-      if (error) throw new ApiError(response.status, error.error.code, error.error.message);
+      if (error)
+        throw guardError(new ApiError(response.status, error.error.code, error.error.message));
+      if (!isMine()) return;
       await queryClient.invalidateQueries({ queryKey: jobsListQueryKey(sessionUser?.id) });
       navigate(`/orders/${id}`);
     } catch (error) {
+      if (!isMine()) {
+        // A late error of an old session instance: ignore entirely.
+        return;
+      }
       if (error instanceof ApiError && error.status === 401) {
         // End the session locally and let the auth gate open the login form;
         // a stale cached me must not bounce the user off it.
@@ -182,9 +204,11 @@ export function OrderForm() {
       }
       setRetry(true);
     } finally {
-      locked.current = false;
-      setBusy(false);
-      setUploading(false);
+      if (isMine()) {
+        locked.current = false;
+        setBusy(false);
+        setUploading(false);
+      }
     }
   }
 

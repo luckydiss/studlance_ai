@@ -5,6 +5,7 @@ import {
   apiErrorMessage,
   formatDate,
   jobsListQueryKey,
+  runInSession,
   useCurrentUser,
   useToast,
 } from "@studlance/shared";
@@ -27,11 +28,14 @@ export function OrdersPage() {
   const orders = useQuery({
     queryKey: jobsListQueryKey(user?.id),
     enabled: user !== null && user !== undefined,
-    queryFn: async () => {
-      const { data, error, response } = await api.GET("/api/client/jobs");
-      if (error) throw new ApiError(response.status, error.error.code, error.error.message);
-      return [...data.jobs].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-    },
+    // Errors are tagged with the session generation captured at request
+    // start: a late failure of an old session is ignored centrally.
+    queryFn: () =>
+      runInSession(async () => {
+        const { data, error, response } = await api.GET("/api/client/jobs");
+        if (error) throw new ApiError(response.status, error.error.code, error.error.message);
+        return [...data.jobs].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+      }),
     retry: false,
   });
   useEffect(() => {

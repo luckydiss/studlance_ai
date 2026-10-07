@@ -2,6 +2,9 @@ import {
   type JobDetail,
   api,
   formatBytes,
+  isCurrentSession,
+  runInSession,
+  sessionGeneration,
   setJobCache,
   useCurrentUser,
   useToast,
@@ -27,13 +30,27 @@ export function Uploading({ detail }: { detail: JobDetail }) {
   const onError = useJobError();
   const { show } = useToast();
   useEffect(() => () => controller.current?.abort(), []);
+  const submitGeneration = useRef(0);
   const submit = useMutation({
-    mutationFn: async () =>
-      requireData(
-        await api.POST("/api/client/jobs/{id}/submit", { params: { path: { id: detail.id } } }),
-      ),
+    mutationFn: async () => {
+      // The session instance is captured at request start: a late response
+      // of an old session must not touch the current one.
+      submitGeneration.current = sessionGeneration();
+      return runInSession(
+        async () =>
+          requireData(
+            await api.POST("/api/client/jobs/{id}/submit", {
+              params: { path: { id: detail.id } },
+            }),
+          ),
+        submitGeneration.current,
+      );
+    },
     onSuccess: (data) => {
-      setJobCache(client, sessionUser?.id, detail.id, data);
+      if (!isCurrentSession(submitGeneration.current)) {
+        return;
+      }
+      setJobCache(client, sessionUser?.id, detail.id, data, submitGeneration.current);
       void invalidate();
     },
     onError,
@@ -43,13 +60,19 @@ export function Uploading({ detail }: { detail: JobDetail }) {
     if (lock.current || entries.length === 0) return;
     lock.current = true;
     setBusy(true);
+    // The whole upload flow belongs to the session instance it started in:
+    // after a session switch its progress and results are ignored.
+    const generation = sessionGeneration();
+    const isMine = () => isCurrentSession(generation);
     controller.current = new AbortController();
     try {
       const result = await runUploads(detail.id, entries, {
         signal: controller.current.signal,
-        onProgress: setProgress,
+        onProgress: (value) => {
+          if (isMine()) setProgress(value);
+        },
       });
-      if (controller.current.signal.aborted) return;
+      if (controller.current.signal.aborted || !isMine()) return;
       uploaded.current = mergeFiles(uploaded.current, result.succeeded);
       setFailed((previous) =>
         mergeFiles(
@@ -58,15 +81,18 @@ export function Uploading({ detail }: { detail: JobDetail }) {
         ),
       );
       for (const failure of result.failures) {
+        if (!isMine()) break;
         show(`Не удалось загрузить ${failure.name}. Попробуйте ещё раз`);
         if (failure.message) onError(new Error(failure.message));
       }
-      await invalidate();
+      if (isMine()) await invalidate();
     } catch (error) {
-      onError(error);
+      if (isMine()) onError(error);
     } finally {
-      lock.current = false;
-      setBusy(false);
+      if (isMine()) {
+        lock.current = false;
+        setBusy(false);
+      }
     }
   }
 
