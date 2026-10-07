@@ -156,10 +156,10 @@ export function OrderForm() {
             );
           },
           fetchImpl: async (input, init) => {
-            const response = await fetch(input, init);
-            if (response.status === 401 && isMine())
-              navigate(`/login?next=${encodeURIComponent(`/orders/${id}`)}`, { replace: true });
-            return response;
+            // Do not expire/navigate mid-flight: RequireAuth would navigate
+            // first with next=/. The single handling point is below, after
+            // all uploads, where next is the already-created order.
+            return fetch(input, init);
           },
         });
         if (!isMine()) return;
@@ -169,6 +169,14 @@ export function OrderForm() {
         );
         pending.current = outcome.failed;
         if (outcome.failed.length > 0) {
+          if (!isMine()) return;
+          if (outcome.failures.some((failure) => failure.status === 401)) {
+            // A 401 of the current upload flow ends the local session and
+            // sends the user to the login form, next pointing at the order.
+            expireSession(queryClient);
+            navigate(`/login?next=${encodeURIComponent(`/orders/${id}`)}`, { replace: true });
+            return;
+          }
           for (const failure of outcome.failures) {
             // Preserve server errors, including 413, alongside the retry instruction.
             if (failure.message) show(failure.message);

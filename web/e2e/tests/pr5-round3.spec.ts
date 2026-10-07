@@ -128,10 +128,10 @@ test("старый 200 после повторного входа A не поя�
 
   // Watch every DOM update from BEFORE the stale response is delivered.
   await watchText(page, "УСТАРЕВШИЙ-ЗАГОЛОВОК-СТАРОЙ-СЕССИИ");
+  const delivered = page.waitForResponse((r) => r.url().includes("/answer"));
   release();
-  // The old 200 is actually delivered to the still-pending mutation; wait
-  // for the route to settle and give the page time to react if it would.
-  await page.waitForTimeout(1500);
+  // The old 200 is actually delivered to the still-pending mutation.
+  await delivered;
   const seen = await readWatch(page);
   expect(seen).toEqual([]);
   await expect(page.getByText("УСТАРЕВШИЙ-ЗАГОЛОВОК-СТАРОЙ-СЕССИИ")).toHaveCount(0);
@@ -198,8 +198,9 @@ test("старый 401 после входа B не открывает логи�
   // The old 401 is delivered now; it must not expire B's session, redirect
   // to the login form or drop B's user state.
   await watchText(page, "Вход в studlance");
+  const delivered = page.waitForResponse((r) => r.url().includes("/answer"));
   release();
-  await page.waitForTimeout(1500);
+  await delivered;
   expect(await readWatch(page)).toEqual([]);
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Что нужно сделать?" })).toBeVisible();

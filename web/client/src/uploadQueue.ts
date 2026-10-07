@@ -15,18 +15,26 @@ export interface UploadEntry {
 
 export type EntryStatus = "pending" | "uploading" | "done" | "failed";
 
+export interface UploadFailure {
+  path: string;
+  name: string;
+  message: string;
+  /** HTTP status of the failed request when the server answered (401, 413…). */
+  status?: number;
+}
+
 export interface UploadProgress {
   /** status per path */
   statuses: Record<string, EntryStatus>;
   doneBytes: number;
   totalBytes: number;
-  failures: { path: string; name: string; message: string }[];
+  failures: UploadFailure[];
 }
 
 export interface UploadOutcome {
   succeeded: UploadEntry[];
   failed: UploadEntry[];
-  failures: { path: string; name: string; message: string }[];
+  failures: UploadFailure[];
 }
 
 export type FetchLike = (
@@ -89,6 +97,7 @@ export async function runUploads(
     statuses[entry.path] = "uploading";
     report();
     let lastMessage = "Не удалось загрузить файл";
+    let lastStatus: number | undefined;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       if (opts.signal?.aborted) {
         statuses[entry.path] = "pending";
@@ -109,6 +118,7 @@ export async function runUploads(
         return;
       } catch (err) {
         const status = (err as { status?: number }).status ?? 0;
+        lastStatus = status || lastStatus;
         lastMessage = (err as Error).message || lastMessage;
         if (isPermanentFailure(status) || attempt === MAX_RETRIES || opts.signal?.aborted) {
           break;
@@ -118,7 +128,12 @@ export async function runUploads(
     }
     statuses[entry.path] = "failed";
     const name = entry.path.split("/").pop() ?? entry.path;
-    failures.push({ path: entry.path, name, message: lastMessage });
+    failures.push({
+      path: entry.path,
+      name,
+      message: lastMessage,
+      status: lastStatus,
+    });
     failed.push(entry);
     report();
   };

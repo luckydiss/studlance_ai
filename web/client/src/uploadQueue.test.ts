@@ -51,6 +51,19 @@ describe("runUploads", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
 
+  it("preserves the HTTP status of the failed upload", async () => {
+    const fetchImpl: FetchLike = vi.fn(
+      async () =>
+        new Response('{"error":{"code":"unauthorized","message":"Требуется вход"}}', {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const out = await runUploads("j1", [entry("a.txt", 1)], { fetchImpl, wait: async () => {} });
+    expect(out.failures[0]?.status).toBe(401);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("does not retry a permanent 413", async () => {
     const fetchImpl: FetchLike = vi.fn(
       async () =>

@@ -299,19 +299,26 @@ func TestKillWorkerContinue(t *testing.T) {
 	h.startWorker()
 
 	jobID := h.newJob("Сделай практическую работу #slow")
-	h.waitFor("draft run started", 30*time.Second, func() bool {
+	// The draft has really started only once its run row exists AND the worker
+	// has persisted the resumable codex session. The session id is posted
+	// asynchronously (OnSession) just after the run starts, so waiting for the
+	// run row alone races the state write: read the id only when it is there.
+	var threadID string
+	h.waitFor("draft run started with a persisted codex session", 30*time.Second, func() bool {
 		aj := h.adminJob(jobID)
+		started := false
 		for _, r := range aj.AgentRuns {
 			if r.Agent == "codex" {
-				return true
+				started = true
 			}
+		}
+		id, _ := aj.State["codex_thread_id"].(string)
+		if started && id != "" {
+			threadID = id
+			return true
 		}
 		return false
 	})
-	threadID, _ := h.adminJob(jobID).State["codex_thread_id"].(string)
-	if threadID == "" {
-		t.Fatalf("codex_thread_id not posted yet")
-	}
 
 	// Убиваем воркер (Ctrl+C): без finish, заказ продолжится как continue.
 	h.stopWorker()

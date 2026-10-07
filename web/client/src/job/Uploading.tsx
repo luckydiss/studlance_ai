@@ -1,4 +1,5 @@
 import {
+  ApiError,
   type JobDetail,
   api,
   formatBytes,
@@ -6,6 +7,7 @@ import {
   runInSession,
   sessionGeneration,
   setJobCache,
+  tagSessionError,
   useCurrentUser,
   useToast,
 } from "@studlance/shared";
@@ -82,6 +84,18 @@ export function Uploading({ detail }: { detail: JobDetail }) {
       );
       for (const failure of result.failures) {
         if (!isMine()) break;
+        if (failure.status === 401) {
+          // A 401 of the current upload flow ends the session through the
+          // shared error handler (expire + login form with next) — no retry
+          // toast for it.
+          onError(
+            tagSessionError(
+              new ApiError(401, "unauthorized", failure.message || "Требуется вход"),
+              generation,
+            ),
+          );
+          return;
+        }
         show(`Не удалось загрузить ${failure.name}. Попробуйте ещё раз`);
         if (failure.message) onError(new Error(failure.message));
       }
