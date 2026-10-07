@@ -77,6 +77,19 @@ export function isSessionExpired() {
   return sessionExpired;
 }
 
+// The return path for the login form after a local session expiry. It is the
+// single source of `next`: the 401 handler that ends the session records it
+// (a created order returns to `/orders/{id}`), and the auth gate reads it
+// instead of the current route, so two redirects can never race and no React
+// or Query ordering can replace the recorded path with the original `/`.
+// Cleared on every login and logout (a new session starts clean).
+let expiredReturnPath: string | null = null;
+
+/** The `next` recorded by the latest local session expiry, or null. */
+export function getExpiredReturnPath() {
+  return expiredReturnPath;
+}
+
 /**
  * Ends the local session without touching the server: the cached `me`
  * becomes null (fresh, so a stale 200 can no longer push the user off the
@@ -84,10 +97,12 @@ export function isSessionExpired() {
  * dropped. Late responses and SSE events of the old session cannot put
  * private data back: job keys carry the user id, a null `me` gates every
  * write of the old session, and the generation bump fences its callbacks.
+ * `returnPath` (when known) is remembered for the auth gate.
  */
-export function expireSession(queryClient: QueryClient) {
+export function expireSession(queryClient: QueryClient, returnPath?: string) {
   generation += 1;
   sessionExpired = true;
+  expiredReturnPath = returnPath ?? null;
   void queryClient.cancelQueries();
   queryClient.setQueryData<CurrentUser | null>(["me"], null);
   queryClient.removeQueries({ queryKey: ["job"] });
@@ -129,6 +144,7 @@ export function useLogin() {
       // before the new session renders anything.
       generation += 1;
       sessionExpired = false;
+      expiredReturnPath = null;
       void queryClient.cancelQueries();
       queryClient.clear();
       queryClient.setQueryData(["me"], user);
@@ -151,6 +167,7 @@ export function useLogout() {
       // components, the query cache is cleared outright.
       generation += 1;
       sessionExpired = false;
+      expiredReturnPath = null;
       void queryClient.cancelQueries();
       queryClient.clear();
     },

@@ -2,6 +2,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import {
   expireSession,
+  getExpiredReturnPath,
   isCurrentSession,
   isStaleSession,
   runInSession,
@@ -30,6 +31,19 @@ describe("session generation", () => {
     expireSession(client);
     expect(isCurrentSession(old)).toBe(false);
     expect(isCurrentSession(sessionGeneration())).toBe(true);
+  });
+
+  it("records the return path of a local expiry as the single source of next", () => {
+    const client = new QueryClient();
+    // No expiry yet: nothing recorded.
+    expect(getExpiredReturnPath()).toBeNull();
+    // The 401 handler that ends the session records the created order.
+    expireSession(client, "/orders/order-abc");
+    expect(getExpiredReturnPath()).toBe("/orders/order-abc");
+    // A later expiry without a path clears it, so the gate falls back to the
+    // current route instead of reusing a stale order.
+    expireSession(client);
+    expect(getExpiredReturnPath()).toBeNull();
   });
 
   it("tags and recognizes stale errors, fresh ones are not stale", () => {

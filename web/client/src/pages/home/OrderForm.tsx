@@ -172,9 +172,11 @@ export function OrderForm() {
           if (!isMine()) return;
           if (outcome.failures.some((failure) => failure.status === 401)) {
             // A 401 of the current upload flow ends the local session and
-            // sends the user to the login form, next pointing at the order.
-            expireSession(queryClient);
-            navigate(`/login?next=${encodeURIComponent(`/orders/${id}`)}`, { replace: true });
+            // records the created order as the return path. The auth gate
+            // performs the single redirect using that recorded path, so no
+            // ordering of Query notifications and React effects can replace
+            // it with the original /.
+            expireSession(queryClient, `/orders/${id}`);
             return;
           }
           for (const failure of outcome.failures) {
@@ -202,11 +204,10 @@ export function OrderForm() {
         return;
       }
       if (error instanceof ApiError && error.status === 401) {
-        // End the session locally and let the auth gate open the login form;
-        // a stale cached me must not bounce the user off it.
-        expireSession(queryClient);
-        const next = jobId.current ? `/orders/${jobId.current}` : "/";
-        navigate(`/login?next=${encodeURIComponent(next)}`, { replace: true });
+        // End the session locally and record the created order (if any) as
+        // the return path; the auth gate opens the login form with it via the
+        // single source, so a stale cached me cannot bounce the user off it.
+        expireSession(queryClient, jobId.current ? `/orders/${jobId.current}` : "/");
       } else {
         show(apiErrorMessage(error));
       }

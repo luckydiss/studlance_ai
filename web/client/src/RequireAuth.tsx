@@ -1,9 +1,12 @@
-import { useCurrentUser } from "@studlance/shared";
+import { getExpiredReturnPath, useCurrentUser } from "@studlance/shared";
 import type { ComponentType, ReactNode } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 
 // Auth gate: no session → /login with a `next` return path; the path is
 // validated as a local one on the login page itself (07-web-client.md).
+// When a local session expiry recorded a return path (a created order), the
+// gate uses it instead of the current route: the expiry and this redirect
+// share one source, so no React/Query ordering can substitute the original /.
 
 export function RequireAuth({
   layout: Layout,
@@ -22,7 +25,8 @@ export function RequireAuth({
     );
   }
   if (isError || !user) {
-    const next = encodeURIComponent(location.pathname + (location.search || ""));
+    const returnPath = getExpiredReturnPath() ?? location.pathname + (location.search || "");
+    const next = encodeURIComponent(returnPath);
     return <Navigate to={`/login?next=${next}`} replace />;
   }
   return (

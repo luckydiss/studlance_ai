@@ -84,6 +84,10 @@ test("старый 200 после повторного входа A не поя�
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
+  let startedResolve: () => void = () => {};
+  const started = new Promise<void>((resolve) => {
+    startedResolve = resolve;
+  });
   const staleBody = JSON.stringify({
     id: job.id,
     title: "УСТАРЕВШИЙ-ЗАГОЛОВОК-СТАРОЙ-СЕССИИ",
@@ -104,6 +108,7 @@ test("старый 200 после повторного входа A не поя�
     can_answer: false,
   });
   await page.route(/\/api\/client\/jobs\/[^/]+\/answer$/, async (route) => {
+    startedResolve();
     await gate;
     await route.fulfill({ status: 200, contentType: "application/json", body: staleBody });
   });
@@ -111,6 +116,7 @@ test("старый 200 после повторного входа A не поя�
   // A sends the answer; while the POST is in flight the session ends
   // server-side (no local logout) and A logs in again in the same tab.
   await answerButton.click();
+  await started; // the answer POST has really started before the session ends
   await page.request.post("/api/auth/logout");
   await spaNavigate(page, "/login");
   await expect(page.getByRole("heading", { name: "Вход в studlance" })).toBeVisible({
@@ -131,7 +137,7 @@ test("старый 200 после повторного входа A не поя�
   const delivered = page.waitForResponse((r) => r.url().includes("/answer"));
   release();
   // The old 200 is actually delivered to the still-pending mutation.
-  await delivered;
+  await (await delivered).finished();
   const seen = await readWatch(page);
   expect(seen).toEqual([]);
   await expect(page.getByText("УСТАРЕВШИЙ-ЗАГОЛОВОК-СТАРОЙ-СЕССИИ")).toHaveCount(0);
@@ -172,7 +178,12 @@ test("старый 401 после входа B не открывает логи�
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
+  let startedResolve: () => void = () => {};
+  const started = new Promise<void>((resolve) => {
+    startedResolve = resolve;
+  });
   await page.route(/\/api\/client\/jobs\/[^/]+\/answer$/, async (route) => {
+    startedResolve();
     await gate;
     await route.fulfill({
       status: 401,
@@ -182,6 +193,7 @@ test("старый 401 после входа B не открывает логи�
   });
 
   await answerButton.click();
+  await started; // the answer POST has really started before the session ends
   await page.request.post("/api/auth/logout");
   await spaNavigate(page, "/login");
   await expect(page.getByRole("heading", { name: "Вход в studlance" })).toBeVisible({
@@ -200,7 +212,7 @@ test("старый 401 после входа B не открывает логи�
   await watchText(page, "Вход в studlance");
   const delivered = page.waitForResponse((r) => r.url().includes("/answer"));
   release();
-  await delivered;
+  await (await delivered).finished();
   expect(await readWatch(page)).toEqual([]);
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Что нужно сделать?" })).toBeVisible();
