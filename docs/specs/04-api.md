@@ -98,6 +98,7 @@
 
 // AdminJobDetail = AdminJobSummary + JobDetail (кроме client-only флагов) +
 { "error": "…" | null, "state": {…}, "lease_epoch": 3, "lease_expires_at": "…",
+  "input_files": [ {"path", "size", "revision": 0 | 2 | 3 | …} ], // AdminInputFile: 0 — исходник, n — вложение доработки n
   "draft": { "documents": [Document…] } | null,         // снимок черновика codex
   "verification": { "found": 7, "fixed": 7, "remaining": [ {"severity","description"} ] } | null,  // по последней версии
   "agent_runs": [ { "id", "agent", "stage", "version", "attempt", "started_at", "finished_at", "outcome",
@@ -109,6 +110,7 @@
 |---|---|---|
 | GET | `/jobs?status=&attention=1&q=` | `{jobs: AdminJobSummary[]}` |
 | GET | `/jobs/{id}` | `AdminJobDetail` |
+| GET | `/jobs/{id}/input/{path}` | скачать исходный файл или вложение доработки; `{path}` — точный `AdminInputFile.path`, закодированный одним сегментом; admin-сессия без worker token/lease; поток байтов и Content-Disposition, 401/403/404 по правам и наличию |
 | GET | `/jobs/{id}/runs/{run_id}/steps?after_seq=` | `{steps: [{seq, ts, type, summary, payload}]}` до 500 за раз |
 | GET | `/jobs/{id}/runs/{run_id}/log` | сырой JSONL |
 | GET | `/jobs/{id}/draft/...` | те же ресурсы страниц, мини-копий и файлов, что у версий, но для черновика |
@@ -121,6 +123,8 @@
 | GET | `/workers` | `[{id, name, capabilities, info, last_seen_at, online, current_job}]`; `online` = last_seen < 45 с |
 | GET | `/clients` | `[{id, email, name, jobs_total, last_job_at}]` |
 | GET | `/jobs/{id}/stream` | SSE со всеми событиями и новыми шагами трейса |
+
+**Уточнение для PR 6:** `AdminInputFile` и admin GET исходников реализуются в этом PR как узкое дополнение OpenAPI/Go/TS. `revision` берётся из метаданных записи файла (`files.version`: исходник 0, вложение — целевой номер доработки), не угадывается по имени папки. Админ группирует вложения по `Revision.version`; клиентский `InputFile` и worker-контракт не меняются. GET ищет только `kind=input` внутри указанного заказа по точному пути из списка и открывает его сохранённый blob key; произвольные ключи хранилища, files другого заказа и `crop` не выдаются. Неизвестный заказ/файл, недопустимый путь — 404. Папки и пробелы сохраняются; `..` запрещён, большие файлы не загружаются целиком в память. Новых таблиц или миграций для этого не нужно.
 
 ## Воркер — `/api/worker`
 
