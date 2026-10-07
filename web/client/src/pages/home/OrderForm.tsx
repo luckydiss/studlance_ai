@@ -2,8 +2,10 @@ import {
   ApiError,
   api,
   apiErrorMessage,
+  expireSession,
   jobsListQueryKey,
   plural,
+  useCurrentUser,
   useToast,
 } from "@studlance/shared";
 import { useQueryClient } from "@tanstack/react-query";
@@ -47,6 +49,7 @@ export function OrderForm() {
   const { show } = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { data: sessionUser } = useCurrentUser();
   const frozen = busy || jobId.current !== null;
 
   // 16px text, 24px line height, 4px vertical padding: two to ten rows.
@@ -165,10 +168,13 @@ export function OrderForm() {
         params: { path: { id } },
       });
       if (error) throw new ApiError(response.status, error.error.code, error.error.message);
-      await queryClient.invalidateQueries({ queryKey: jobsListQueryKey() });
+      await queryClient.invalidateQueries({ queryKey: jobsListQueryKey(sessionUser?.id) });
       navigate(`/orders/${id}`);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
+        // End the session locally and let the auth gate open the login form;
+        // a stale cached me must not bounce the user off it.
+        expireSession(queryClient);
         const next = jobId.current ? `/orders/${jobId.current}` : "/";
         navigate(`/login?next=${encodeURIComponent(next)}`, { replace: true });
       } else {

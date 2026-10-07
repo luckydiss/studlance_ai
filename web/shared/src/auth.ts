@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
 
 // Session helpers (04-api.md /auth): HttpOnly cookie, no tokens in storage.
@@ -33,6 +33,31 @@ export function useCurrentUser() {
   });
 }
 
+// Set when a client-API 401 ended the session locally: the login form must
+// trust this state instead of re-verifying me (the server may still answer
+// /me 200 for other routes, but this session is over for the client).
+let sessionExpired = false;
+
+export function isSessionExpired() {
+  return sessionExpired;
+}
+
+/**
+ * Ends the local session without touching the server: the cached `me`
+ * becomes null (fresh, so a stale 200 can no longer push the user off the
+ * login form), in-flight private queries are cancelled and their caches
+ * dropped. Late responses and SSE events of the old session cannot put
+ * private data back: job keys carry the user id, and a null `me` gates
+ * every write of the old session.
+ */
+export function expireSession(queryClient: QueryClient) {
+  sessionExpired = true;
+  void queryClient.cancelQueries();
+  queryClient.setQueryData<CurrentUser | null>(["me"], null);
+  queryClient.removeQueries({ queryKey: ["job"] });
+  queryClient.removeQueries({ queryKey: ["jobs"] });
+}
+
 export function useLogin() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -45,6 +70,11 @@ export function useLogin() {
       return data.user;
     },
     onSuccess: (user) => {
+      // A new session starts clean: cancel everything of the previous one
+      // (responses in flight, caches, live data) before showing it.
+      sessionExpired = false;
+      void queryClient.cancelQueries();
+      queryClient.clear();
       queryClient.setQueryData(["me"], user);
     },
   });
@@ -63,6 +93,8 @@ export function useLogout() {
     onSettled: () => {
       // Drop all user data and live caches: subscriptions close with their
       // components, the query cache is cleared outright.
+      sessionExpired = false;
+      void queryClient.cancelQueries();
       queryClient.clear();
     },
   });

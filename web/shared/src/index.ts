@@ -22,7 +22,14 @@ export { formatDate, formatOrderDate, formatBytes, plural } from "./format";
 export { safeNextPath, inputUploadUrl, bundleUrl, jobStreamUrl } from "./paths";
 export { ApiError, apiErrorMessage, apiErrorStatus, throwApiError } from "./errors";
 export { ToastProvider, useToast, useApiErrorToast } from "./toast";
-export { useCurrentUser, useLogin, useLogout, type CurrentUser } from "./auth";
+export {
+  expireSession,
+  isSessionExpired,
+  useCurrentUser,
+  useLogin,
+  useLogout,
+  type CurrentUser,
+} from "./auth";
 export { useJobStream } from "./sse";
 export {
   jobQueryKey,

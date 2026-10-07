@@ -363,7 +363,10 @@ test("390 px: нет горизонтального переполнения, р
   await page.request.post(`/api/client/jobs/${job.id}/submit`);
   await waitForApiStatus(page, job.id, "done");
 
-  const mobile = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const mobile = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+  });
   const m = await mobile.newPage();
   await login(m);
   await m.goto("/");
@@ -379,8 +382,15 @@ test("390 px: нет горизонтального переполнения, р
   );
   expect(jobOverflow).toBeLessThanOrEqual(1);
 
-  // Rectangle drawing on a scaled-down sheet still produces valid fractions.
+  // Keyboard controls: focus lands on real controls and Enter activates
+  // the next-page button.
   await collapseStatusWindow(m);
+  await m.getByRole("button", { name: "Следующая страница" }).focus();
+  await m.keyboard.press("Enter");
+  await m.getByText("лист 2 из").waitFor();
+
+  // Touch drawing (a real finger, not a renamed mouse) on a scaled-down
+  // sheet still produces valid fractions.
   await clickAboveStatusWindow(m, "Нужна доработка");
   const sheet = m.locator('main img[alt*="лист"]').first();
   await sheet.waitFor({ state: "visible" });
@@ -389,10 +399,21 @@ test("390 px: нет горизонтального переполнения, р
   if (!box) {
     throw new Error("mobile sheet has no bounding box");
   }
-  await m.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
-  await m.mouse.down();
-  await m.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.36, { steps: 6 });
-  await m.mouse.up();
+  const cdp = await m.context().newCDPSession(m);
+  const touch = (type: "touchStart" | "touchMove" | "touchEnd", x?: number, y?: number) =>
+    cdp.send("Input.dispatchTouchEvent", {
+      type,
+      touchPoints: x === undefined || y === undefined ? [] : [{ x, y }],
+    });
+  await touch("touchStart", box.x + box.width * 0.3, box.y + box.height * 0.3);
+  for (let step = 1; step <= 6; step += 1) {
+    await touch(
+      "touchMove",
+      box.x + box.width * (0.3 + 0.05 * step),
+      box.y + box.height * (0.3 + 0.01 * step),
+    );
+  }
+  await touch("touchEnd");
   await m.getByRole("textbox", { name: "Что поправить?" }).fill("Мобильное замечание");
   await m.getByRole("button", { name: "Добавить" }).click();
   await m.getByRole("button", { name: "Отправить на доработку" }).click();

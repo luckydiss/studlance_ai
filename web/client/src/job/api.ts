@@ -1,6 +1,7 @@
 import {
   apiErrorMessage,
   apiErrorStatus,
+  expireSession,
   jobQueryKey,
   jobsListQueryKey,
   useApiErrorToast,
@@ -20,27 +21,33 @@ export function useJobError() {
   const toast = useApiErrorToast();
   const navigate = useNavigate();
   const location = useLocation();
+  const queryClient = useQueryClient();
   return useCallback(
     (error: unknown) => {
-      toast(error);
       if (apiErrorStatus(error) === 401) {
+        // The session is gone: end it locally (me=null, private caches and
+        // subscriptions dropped) and open the login form with the current
+        // route to return to. A plain network error only toasts.
+        expireSession(queryClient);
         navigate(`/login?next=${encodeURIComponent(location.pathname + location.search)}`, {
           replace: true,
         });
+        return;
       }
+      toast(error);
     },
-    [toast, navigate, location.pathname, location.search],
+    [toast, navigate, location.pathname, location.search, queryClient],
   );
 }
 
-export function useInvalidateJob(id: string) {
+export function useInvalidateJob(userId: string | null | undefined, id: string) {
   const client = useQueryClient();
   return useCallback(
     () =>
       Promise.all([
-        client.invalidateQueries({ queryKey: jobQueryKey(id) }),
-        client.invalidateQueries({ queryKey: jobsListQueryKey() }),
+        client.invalidateQueries({ queryKey: jobQueryKey(userId, id) }),
+        client.invalidateQueries({ queryKey: jobsListQueryKey(userId) }),
       ]),
-    [client, id],
+    [client, id, userId],
   );
 }

@@ -10,11 +10,14 @@ export interface PickedFile {
 
 const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024; // --max-upload, 2 GiB
 
-/** Normalizes "/" separators and drops empty and dot segments ("..", "."). */
+/**
+ * Normalizes "/" separators and drops empty and traversal segments ("..",
+ * "."). Segment names are preserved byte-for-byte: spaces in file and folder
+ * names are valid and must survive (07-web-client.md).
+ */
 export function normalizeRelPath(path: string): string {
   return path
     .split(/[\\/]+/)
-    .map((p) => p.trim())
     .filter((p) => p.length > 0 && p !== "." && p !== "..")
     .join("/");
 }

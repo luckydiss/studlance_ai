@@ -5,11 +5,12 @@ import {
   apiErrorMessage,
   formatDate,
   jobsListQueryKey,
+  useCurrentUser,
   useToast,
 } from "@studlance/shared";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import styles from "./home/Pages.module.css";
 
 function statusColor(status: JobSummary["client_status"]) {
@@ -20,10 +21,12 @@ function statusColor(status: JobSummary["client_status"]) {
 }
 
 export function OrdersPage() {
-  const navigate = useNavigate();
   const { show } = useToast();
+  // The list cache is bound to the current user (07-web-client.md).
+  const { data: user } = useCurrentUser();
   const orders = useQuery({
-    queryKey: jobsListQueryKey(),
+    queryKey: jobsListQueryKey(user?.id),
+    enabled: user !== null && user !== undefined,
     queryFn: async () => {
       const { data, error, response } = await api.GET("/api/client/jobs");
       if (error) throw new ApiError(response.status, error.error.code, error.error.message);
@@ -33,12 +36,12 @@ export function OrdersPage() {
   });
   useEffect(() => {
     if (!orders.error) return;
-    if (orders.error instanceof ApiError && orders.error.status === 401) {
-      navigate("/login?next=%2Forders", { replace: true });
-    } else {
+    // 401 ends the session centrally (main.tsx) and the auth gate opens the
+    // login form with this route as next; other errors stay on the page.
+    if (!(orders.error instanceof ApiError && orders.error.status === 401)) {
       show(apiErrorMessage(orders.error));
     }
-  }, [orders.error, navigate, show]);
+  }, [orders.error, show]);
   return (
     <main className={styles.ordersPage}>
       <div className={styles.ordersHeading}>

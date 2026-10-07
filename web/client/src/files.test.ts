@@ -17,6 +17,15 @@ describe("normalizeRelPath", () => {
   });
 });
 
+it("preserves spaces in file and folder names byte-for-byte", () => {
+  // Two names differing only by spaces are two different files (Windows
+  // allows both); normalization must not collapse them.
+  expect(normalizeRelPath("  report.txt")).toBe("  report.txt");
+  expect(normalizeRelPath("report.txt")).toBe("report.txt");
+  expect(normalizeRelPath("  report.txt")).not.toBe(normalizeRelPath("report.txt"));
+  expect(normalizeRelPath("Папка с пробелами/ файл.txt ")).toBe("Папка с пробелами/ файл.txt ");
+});
+
 describe("chipsFromFiles", () => {
   it("groups folder files into one chip with a count", () => {
     const chips = chipsFromFiles([
@@ -42,6 +51,22 @@ describe("mergeFiles/removeChip", () => {
   it("replaces by path", () => {
     const merged = mergeFiles([f("a.txt")], [f("a.txt"), f("b.txt")]);
     expect(merged.map((x) => x.path)).toEqual(["a.txt", "b.txt"]);
+  });
+
+  it("keeps names that differ only by spaces as separate files", () => {
+    const merged = mergeFiles([], [f("  report.txt"), f("report.txt")]);
+    expect(merged).toHaveLength(2);
+    const paths = merged.map((x) => x.path);
+    expect(paths).toContain("  report.txt");
+    expect(paths).toContain("report.txt");
+  });
+
+  it("replaces only the exactly matching path", () => {
+    const first = { path: "  report.txt", file: new File(["один"], "report.txt") };
+    const second = { path: "  report.txt", file: new File(["другие байты"], "report.txt") };
+    const merged = mergeFiles([first], [second]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.file).toBe(second.file);
   });
 
   it("removes all files of a folder chip", () => {

@@ -5,6 +5,7 @@ import {
   api,
   setJobCache,
   throwApiError,
+  useCurrentUser,
   useToast,
 } from "@studlance/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -93,7 +94,8 @@ export function KitViewer({ detail }: { detail: JobDetail }) {
   const [files, setFiles] = useState<PickedFile[]>([]);
   const [readingFiles, setReadingFiles] = useState(false);
   const client = useQueryClient();
-  const invalidate = useInvalidateJob(detail.id);
+  const { data: sessionUser } = useCurrentUser();
+  const invalidate = useInvalidateJob(sessionUser?.id, detail.id);
   const onError = useJobError();
   const { show } = useToast();
   useEffect(() => {
@@ -145,7 +147,7 @@ export function KitViewer({ detail }: { detail: JobDetail }) {
       return (await response.json()) as JobDetail;
     },
     onSuccess: (data) => {
-      setJobCache(client, detail.id, data);
+      setJobCache(client, sessionUser?.id, detail.id, data);
       setMode(false);
       setRemarks([]);
       setComment("");

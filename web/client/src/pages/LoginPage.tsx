@@ -1,15 +1,28 @@
-import { safeNextPath, useCurrentUser, useLogin } from "@studlance/shared";
-import { useState } from "react";
+import { isSessionExpired, safeNextPath, useCurrentUser, useLogin } from "@studlance/shared";
+import { useEffect, useState } from "react";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import styles from "./home/Pages.module.css";
 
 export function LoginPage() {
-  const { data: user, isPending } = useCurrentUser();
+  const me = useCurrentUser();
+  const { data: user, isPending } = me;
   const login = useLogin();
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  // The cached `me` (staleTime 60 s) must not hide the form when the session
+  // is actually gone: verify it against the server once on mount. A 401
+  // resolves to null and the form stays; a live session still redirects.
+  const refetchMe = me.refetch;
+  useEffect(() => {
+    // The form must not trust a cached (possibly stale) `me` — but a session
+    // ended locally by a 401 is final: no re-verification, the form stays.
+    if (isSessionExpired()) {
+      return;
+    }
+    void refetchMe();
+  }, [refetchMe]);
   // The successful form submission owns the redirect to ?next=.
   if (user && !login.isSuccess) return <Navigate to="/" replace />;
   return (

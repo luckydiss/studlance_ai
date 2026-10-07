@@ -1,4 +1,11 @@
-import { type JobDetail, api, formatBytes, setJobCache, useToast } from "@studlance/shared";
+import {
+  type JobDetail,
+  api,
+  formatBytes,
+  setJobCache,
+  useCurrentUser,
+  useToast,
+} from "@studlance/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { MAX_TOTAL_UPLOAD_BYTES, type PickedFile, exceedsLimit, mergeFiles } from "../files";
@@ -15,7 +22,8 @@ export function Uploading({ detail }: { detail: JobDetail }) {
   const uploaded = useRef<UploadEntry[]>([]);
   const controller = useRef<AbortController>();
   const client = useQueryClient();
-  const invalidate = useInvalidateJob(detail.id);
+  const { data: sessionUser } = useCurrentUser();
+  const invalidate = useInvalidateJob(sessionUser?.id, detail.id);
   const onError = useJobError();
   const { show } = useToast();
   useEffect(() => () => controller.current?.abort(), []);
@@ -25,7 +33,7 @@ export function Uploading({ detail }: { detail: JobDetail }) {
         await api.POST("/api/client/jobs/{id}/submit", { params: { path: { id: detail.id } } }),
       ),
     onSuccess: (data) => {
-      setJobCache(client, detail.id, data);
+      setJobCache(client, sessionUser?.id, detail.id, data);
       void invalidate();
     },
     onError,

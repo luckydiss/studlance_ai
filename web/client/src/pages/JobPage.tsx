@@ -1,4 +1,5 @@
 import {
+  type CurrentUser,
   type JobDetail,
   api,
   apiErrorStatus,
@@ -7,6 +8,7 @@ import {
   formatOrderDate,
   jobQueryKey,
   setJobCache,
+  useCurrentUser,
   useJobStream,
 } from "@studlance/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -21,30 +23,35 @@ import { requireData, useInvalidateJob, useJobError } from "../job/api";
 export function JobPage() {
   const { id = "" } = useParams();
   const onError = useJobError();
+  const { data: user } = useCurrentUser();
+  // The job cache is bound to the current user: after a session switch the
+  // previous account's data is never rendered, even before the fetch
+  // settles, and a 404 wins over any cached data.
   const query = useQuery({
-    queryKey: jobQueryKey(id),
+    queryKey: jobQueryKey(user?.id, id),
+    enabled: user !== null && user !== undefined,
     queryFn: async () =>
       requireData(await api.GET("/api/client/jobs/{id}", { params: { path: { id } } })),
     retry: (count, error) =>
       apiErrorStatus(error) !== 404 && apiErrorStatus(error) !== 401 && count < 2,
   });
-  useJobStream(id, true);
+  useJobStream(id, user !== null && user !== undefined);
   useEffect(() => {
     if (query.error && apiErrorStatus(query.error) !== 404) onError(query.error);
   }, [query.error, onError]);
-  if (query.data) return <JobContent key={id} detail={query.data} />;
-  if (query.isPending) {
-    return (
-      <main className={styles.empty}>
-        <output>Загружаем…</output>
-      </main>
-    );
-  }
-  if (apiErrorStatus(query.error) === 404) {
+  if (query.error && apiErrorStatus(query.error) === 404) {
     return (
       <main className={styles.empty}>
         <h1>Заказ не найден</h1>
         <Link to="/orders">Мои заказы</Link>
+      </main>
+    );
+  }
+  if (query.data) return <JobContent key={id} detail={query.data} user={user ?? null} />;
+  if (query.isPending) {
+    return (
+      <main className={styles.empty}>
+        <output>Загружаем…</output>
       </main>
     );
   }
@@ -65,13 +72,13 @@ export function JobPage() {
   );
 }
 
-function JobContent({ detail }: { detail: JobDetail }) {
+function JobContent({ detail, user }: { detail: JobDetail; user: CurrentUser | null }) {
   const [confirming, setConfirming] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const question = useRef<HTMLElement>(null);
   const [answer, setAnswer] = useState("");
   const client = useQueryClient();
-  const invalidate = useInvalidateJob(detail.id);
+  const invalidate = useInvalidateJob(user?.id, detail.id);
   const onError = useJobError();
   const cancel = useMutation({
     mutationFn: async () =>
@@ -80,7 +87,7 @@ function JobContent({ detail }: { detail: JobDetail }) {
       ),
     onSuccess: (data) => {
       setConfirming(false);
-      setJobCache(client, detail.id, data);
+      setJobCache(client, user?.id, detail.id, data);
       void invalidate();
     },
     onError,
@@ -95,7 +102,7 @@ function JobContent({ detail }: { detail: JobDetail }) {
       ),
     onSuccess: (data) => {
       setAnswer("");
-      setJobCache(client, detail.id, data);
+      setJobCache(client, user?.id, detail.id, data);
       void invalidate();
     },
     onError,

@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
+import { type CurrentUser, useCurrentUser } from "./auth";
 import { type JobDetail, setJobCache } from "./jobs";
 import { jobStreamUrl } from "./paths";
 
@@ -9,12 +10,17 @@ import { jobStreamUrl } from "./paths";
 // - both events replace the cached detail, so after a reconnect the fresh
 //   snapshot restores the actual state;
 // - on drop the hook reconnects with a 1→2→5→10 s pause;
-// - unmount closes the EventSource and clears pending timers.
+// - unmount closes the EventSource and clears pending timers;
+// - the subscription belongs to the current user: when the session ends or
+//   the account changes the subscription closes, and events of the old
+//   session are ignored (they can only write into the old user's key while
+//   no session is active).
 
 const RECONNECT_STEPS_MS = [1000, 2000, 5000, 10000];
 
 export function useJobStream(jobId: string, enabled: boolean) {
   const queryClient = useQueryClient();
+  const { data: user } = useCurrentUser();
   const attemptRef = useRef(0);
   const timerRef = useRef<number | undefined>(undefined);
 
@@ -22,6 +28,7 @@ export function useJobStream(jobId: string, enabled: boolean) {
     if (!enabled) {
       return;
     }
+    const userId = user?.id ?? null;
     let disposed = false;
     let source: EventSource | null = null;
 
@@ -32,12 +39,17 @@ export function useJobStream(jobId: string, enabled: boolean) {
       }
     };
 
+    const sessionStillCurrent = () => {
+      const current = queryClient.getQueryData<CurrentUser | null>(["me"]);
+      return current?.id === userId;
+    };
+
     const applyDetail = (raw: string) => {
       try {
         const detail = JSON.parse(raw) as JobDetail;
-        if (detail && detail.id === jobId) {
+        if (detail && detail.id === jobId && sessionStillCurrent()) {
           attemptRef.current = 0;
-          setJobCache(queryClient, jobId, detail);
+          setJobCache(queryClient, userId, jobId, detail);
         }
       } catch {
         // A partial write between events: the next event replaces the cache.
@@ -45,7 +57,7 @@ export function useJobStream(jobId: string, enabled: boolean) {
     };
 
     const connect = () => {
-      if (disposed) {
+      if (disposed || !sessionStillCurrent()) {
         return;
       }
       source = new EventSource(jobStreamUrl(jobId));
@@ -72,5 +84,5 @@ export function useJobStream(jobId: string, enabled: boolean) {
       clearTimer();
       source?.close();
     };
-  }, [jobId, enabled, queryClient]);
+  }, [jobId, enabled, user?.id, queryClient]);
 }
