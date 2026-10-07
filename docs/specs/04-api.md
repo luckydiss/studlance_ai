@@ -72,7 +72,7 @@
 | Метод | Путь | Что |
 |---|---|---|
 | GET | `/jobs` | `{jobs: JobSummary[]}` новые сверху |
-| POST | `/jobs` | `{prompt}` (1–20 000 символов) → `201 JobDetail` со статусом `uploading` |
+| POST | `/jobs` | `{prompt}` (0–20 000 символов; пустой запрос допустим — заказ с одними файлами; нормализация: обрезка пробелов) → `201 JobDetail` со статусом `uploading` |
 | PUT | `/jobs/{id}/input?path=<относительный путь>` | тело — байты файла (`application/octet-stream`), только в `uploading` → `200 {path, size}`; лимит суммарно `--max-upload` |
 | DELETE | `/jobs/{id}/input?path=…` | удалить загруженный файл (только `uploading`) → 204 |
 | POST | `/jobs/{id}/submit` | `uploading` → `queued` → `200 JobDetail` |

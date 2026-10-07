@@ -114,3 +114,28 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y poppler-utils
       - name: go test e2e
         run: go test -race -tags e2e -timeout 10m ./e2e/...
+  web-e2e:
+    name: Web e2e (Playwright, cabinet UI + server + worker + fake agents)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: poppler
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - name: install web deps
+        run: pnpm -C web install --frozen-lockfile
+      - name: install playwright browsers
+        run: pnpm -C web/e2e exec playwright install --with-deps chromium
+      - name: playwright
+        run: pnpm -C web/e2e run e2e

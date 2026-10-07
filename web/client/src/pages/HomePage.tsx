@@ -1,9 +1,14 @@
-// Placeholder for the new-order screen (built in PR 5, per 07-web-client.md).
+import styles from "./home/Home.module.css";
+import { HowCarousel } from "./home/HowCarousel";
+import { KitSection } from "./home/KitSection";
+import { OrderForm } from "./home/OrderForm";
+
 export function HomePage() {
   return (
-    <main className="sl-page">
-      <h1>Что нужно сделать?</h1>
-      <p>Каркас кабинета. Экраны появятся в следующих PR.</p>
+    <main className={styles.home}>
+      <OrderForm />
+      <KitSection />
+      <HowCarousel />
     </main>
   );
 }

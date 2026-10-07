@@ -47,8 +47,8 @@ func (s *Server) ClientCreateJob(ctx context.Context, request ClientCreateJobReq
 		return ClientCreateJob400JSONResponse{errBadRequest("Пустой запрос")}, nil
 	}
 	prompt := strings.TrimSpace(request.Body.Prompt)
-	if prompt == "" || len([]rune(prompt)) > 20000 {
-		return ClientCreateJob400JSONResponse{errBadRequest("Запрос должен быть от 1 до 20000 символов")}, nil
+	if len([]rune(prompt)) > 20000 {
+		return ClientCreateJob400JSONResponse{errBadRequest("Запрос должен быть до 20000 символов")}, nil
 	}
 	now := s.now()
 	j := store.Job{

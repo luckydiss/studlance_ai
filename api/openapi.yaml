@@ -1523,10 +1523,12 @@ components:
     CreateJobRequest:
       type: object
       required: [prompt]
+      description: Запрос может быть пустым (заказ с одними файлами); submit
+        всё равно требует файл или запрос от 20 символов (03-lifecycle.md).
       properties:
         prompt:
           type: string
-          minLength: 1
+          minLength: 0
           maxLength: 20000
     AnswerRequest:
       type: object
