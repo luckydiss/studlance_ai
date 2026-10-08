@@ -1,6 +1,6 @@
 # PR 6 — завершение пульта, 2026-10-08
 
-Статус: PR #6 открыт; локальные проверки и все CI checks на финальном head завершились успешно. Слияние требует отдельной команды владельца.
+Статус: PR #6 принят и влит в `main` по отдельной команде владельца. Проверенный head `2f05fc835b88d92ae69c725f2c61541d2616c0c8`; merge-коммит `8e040495b79f69041606f9b4b0a2d372785f72e4`.
 
 Незавершённая реализация сохранена и продолжена в изолированном checkout. Исходные изменения не потеряны. Реализованы маршруты пульта, заказы и фильтры, разбор заказа, история и live-события, документы и замечания, действия администратора, клиенты и воркеры.
 
@@ -33,7 +33,7 @@
 | CI на финальном head | все 6 checks прошли: Web, Generate, Windows build, Go, Go e2e, Web e2e |
 | Скриншоты | synthetic admin review сохранён в 390 px и 1440 px; mockup оставлен без изменений |
 
-Локальные Go-прогоны выполнены на Go 1.26.8 с `CGO_ENABLED=0`, без race detector. Проверка `-race` должна быть подтверждена CI. Raw логи, исходный снимок и локальные пути хранятся вне публичного репозитория. Данные для браузерных сценариев синтетические.
+Локальные Go-прогоны выполнены на Go 1.26.8 с `CGO_ENABLED=0`, без race detector. Проверка `-race` подтверждена зелёными Go/Go e2e jobs CI принятого head. Raw логи, исходный снимок и локальные пути хранятся вне публичного репозитория. Данные для браузерных сценариев синтетические.
 
 ## Follow-up findings and verification
 
@@ -45,4 +45,12 @@ The combined order-filter test passes with the exact client id, email query, fai
 
 At narrow widths, the desktop panel flex-grow values had caused the trace to shrink while the sheets panel occupied the same vertical space. The ≤1120 px layout now gives each panel intrinsic height and caps the trace steps scroller at 420 px. The 390 px browser regression compares the trace/sheets bounding boxes and verifies that the step list scrolls within its own panel. The final screenshot shows SheetsPanel below the complete trace panel.
 
-Raw logs and screenshots are stored outside the repository in the review artifact directory. They include web lint/unit/build, post-build Go vet/unit, the complete 44-test Playwright run, targeted race regressions, and 390/1440 screenshots. After the browser-route fixture update, the targeted test passed 1/1 and the clean full Playwright run `pnpm exec playwright test --workers=1` passed 44/44 with no skips. The route update is test-only; production code and the final web build are unchanged. All six GitHub CI checks passed on final head `2158df2`. Local Go checks used Go 1.26.8 with CGO disabled; race detector was not run locally.
+Raw logs and screenshots are stored outside the repository in the review artifact directory. They include web lint/unit/build, post-build Go vet/unit, the complete 44-test Playwright run, targeted race regressions, and 390/1440 screenshots. After the browser-route fixture update, the targeted test passed 1/1 and the clean full Playwright run `pnpm exec playwright test --workers=1` passed 44/44 with no skips. The route update is test-only; production code and the final web build are unchanged. All six GitHub CI checks passed on code/test head `2158df2` and on the final documentation head `2f05fc8`. Local Go checks used Go 1.26.8 with CGO disabled; race detector was not run locally.
+
+## Слияние по команде владельца — 2026-10-08
+
+Перед слиянием повторно получены удалённые ветки: база `40ab2669c9ef399c0142d9aa397021827f724c13`, head PR `2f05fc835b88d92ae69c725f2c61541d2616c0c8`. На этом точном head все шесть CI checks завершены успешно. Независимый ревьюер подтвердил отсутствие P1/P2; финальные коммиты после реализации изменяют тестовую fixture и отчёт.
+
+В отдельном checkout создан локальный merge-коммит `8e040495b79f69041606f9b4b0a2d372785f72e4` с этими двумя родителями, конфликтов нет. До документальных изменений его полное tracked-дерево совпадало с принятым head. После frozen install в web и нового production web build повторно прошли `go vet ./...` и `go test -count=1 ./...` с exit 0; оба Windows amd64 exe также собраны с exit 0. Первоначальный install из корня без package.json не считается успешной проверкой; корректный frozen install в web выполнен полностью. Локально CGO выключен; новый race-прогон не заявляется. Полный Playwright повторно не запускался: production-дерево совпадает с принятым, 44/44 и CI сохраняют силу.
+
+Оркестратор отдельно обновил состояние и подготовил [промпт PR 7](pr7-prompt.md). Спеки 01/09 уточнены: поставляемый Windows-артефакт должен включать оба production-фронта и проходить smoke именно этого exe. Текущий Windows CI job собирает Go без web build, поэтому до исправления в PR 7 его артефакт не считается готовой поставкой сайта. Функциональность PR 6 проверена с собранными фронтами. Production-код оркестратор не менял; частные данные, demo и raw-артефакты в main не включены.
