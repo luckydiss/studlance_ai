@@ -31,11 +31,42 @@
    ```
 
    Официальные инструкции: [Playwright для Python](https://playwright.dev/python/docs/library) и [установка браузеров](https://playwright.dev/python/docs/browsers). Устанавливайте Chromium в профиль `studlance`, потому что кэш браузера пользовательский.
-5. Установите Poppler из выбранного проверенного источника Windows-сборки. [Официальный сайт Poppler](https://poppler.freedesktop.org/) публикует исходные релизы и подписи, но не предлагает готовый официальный Windows-инсталлятор. Не используйте выдуманное имя пакета или случайный неподписанный установщик. Проверьте происхождение и подпись/хэш выбранного архива, распакуйте его в `C:\studlance\poppler`, найдите `pdftoppm.exe` и закрепите именно этот полный путь в конфиге.
+5. Установите закреплённый portable-комплект Poppler для Windows. Upstream [Poppler](https://poppler.freedesktop.org/) публикует исходный код; готовый Windows ZIP ниже — сторонняя упаковка, а не официальный установщик Poppler. Репозиторий [oschwartz10612/poppler-windows](https://github.com/oschwartz10612/poppler-windows) описывает комплект как перепаковку собранных conda-forge бинарников с зависимостями и данными Poppler. Для этой инструкции закреплён релиз [26.07.0-0](https://github.com/oschwartz10612/poppler-windows/releases/tag/v26.07.0-0), файл `Release-26.07.0-0.zip`. Ожидаемый SHA-256 взят из поля `assets[].digest` [GitHub API этого релиза](https://api.github.com/repos/oschwartz10612/poppler-windows/releases/tags/v26.07.0-0): `a711b0563b06edc488583d28198b6734c5a494afbbd1b9d87d3d2866062fb7e2`.
+
+   Скачайте архив во временную папку вне `Documents`, проверьте SHA-256 до распаковки, затем перенесите всё содержимое `Library` и папку `share\poppler` в постоянный комплект. Не оставляйте только exe: DLL находятся рядом в `bin`, а каталоги данных тоже должны сохраниться.
+
+   ```powershell
+   $ErrorActionPreference = 'Stop'
+   $Root = 'C:\studlance'
+   $Stage = Join-Path $Root 'install\poppler-26.07.0-0'
+   $Archive = Join-Path $Stage 'Release-26.07.0-0.zip'
+   $Extract = Join-Path $Stage 'extracted'
+   $PopplerDir = Join-Path $Root 'poppler'
+   $ExpectedSha256 = 'a711b0563b06edc488583d28198b6734c5a494afbbd1b9d87d3d2866062fb7e2'
+   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+   New-Item -ItemType Directory -Force -Path $Stage,$PopplerDir | Out-Null
+   Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/oschwartz10612/poppler-windows/releases/download/v26.07.0-0/Release-26.07.0-0.zip' -OutFile $Archive
+   $ActualSha256 = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLowerInvariant()
+   if ($ActualSha256 -ne $ExpectedSha256) { throw "SHA-256 Poppler не совпал: $ActualSha256" }
+   Expand-Archive -LiteralPath $Archive -DestinationPath $Extract -Force
+   $Package = Join-Path $Extract 'poppler-26.07.0'
+   Copy-Item -Path (Join-Path $Package 'Library\*') -Destination $PopplerDir -Recurse -Force
+   $PopplerData = Join-Path $PopplerDir 'share\poppler'
+   New-Item -ItemType Directory -Force -Path $PopplerData | Out-Null
+   Copy-Item -Path (Join-Path $Package 'share\poppler\*') -Destination $PopplerData -Recurse -Force
+   $Pdftoppm = Join-Path $PopplerDir 'bin\pdftoppm.exe'
+   if (!(Test-Path -LiteralPath $Pdftoppm)) { throw "Не найден $Pdftoppm" }
+   & $Pdftoppm -v
+   if ($LASTEXITCODE -ne 0) { throw "pdftoppm завершился с кодом $LASTEXITCODE" }
+   ```
+
+   Закреплённый путь для `worker.toml`: `C:\studlance\poppler\bin\pdftoppm.exe`. Проверка SHA подтверждает точные байты архива; сам комплект остаётся сторонним ПО.
 6. Проверьте команды и версии в PowerShell пользователя `studlance`. Для каждой внешней команды проверяйте `$LASTEXITCODE` сразу после её запуска:
 
    ```powershell
-   Get-Command codex,claude,python,pdftoppm | Select-Object Name,Source
+   Get-Command codex,claude,python | Select-Object Name,Source
+   $Pdftoppm = 'C:\studlance\poppler\bin\pdftoppm.exe'
+   (Get-Item -LiteralPath $Pdftoppm).FullName
    codex --version
    if ($LASTEXITCODE -ne 0) { throw "Codex CLI не запустился" }
    claude --version
@@ -46,11 +77,11 @@
    if ($LASTEXITCODE -ne 0) { throw "Не найдены Python-пакеты" }
    python -m playwright --version
    if ($LASTEXITCODE -ne 0) { throw "Playwright не запустился" }
-   pdftoppm -v
+   & $Pdftoppm -v
    if ($LASTEXITCODE -ne 0) { throw "pdftoppm не запустился" }
    ```
 
-   Откройте новый PowerShell после установки PATH. Убедитесь, что `Get-Command` показывает ожидаемые пути, а не другой одноимённый CLI или Python.
+   Откройте новый PowerShell после установки CLI и Python. Убедитесь, что `Get-Command` показывает ожидаемые пути, а не другой одноимённый CLI или Python. Poppler вызывается по абсолютному пути из TOML и не требует изменения системного `PATH`.
 
 ## Получите комплект
 
@@ -97,7 +128,7 @@ $PopplerDir = Join-Path $Root 'poppler'
 New-Item -ItemType Directory -Force -Path $ServerDir,$WorkerDir,$DataDir,$JobsDir,$BackupDir,$PopplerDir | Out-Null
 ```
 
-Скопируйте `studlance-server.exe` в `C:\studlance\server`, `studlance-worker.exe` в `C:\studlance\worker`, а проверенный `pdftoppm.exe` и нужные ему файлы Poppler — в постоянную папку `C:\studlance\poppler`. В `C:\studlance\worker` скопируйте пример `worker.example.toml` как `worker.toml`, затем отредактируйте локальную копию. Оставьте `token = ""` до шага выдачи токена. В примере уже есть один комплект секций; не добавляйте дублирующие `[codex]`, `[claude]` и другие TOML-секции.
+Скопируйте `studlance-server.exe` в `C:\studlance\server`, `studlance-worker.exe` в `C:\studlance\worker`. Комплект Poppler из предыдущего шага уже находится в `C:\studlance\poppler`. В `C:\studlance\worker` скопируйте пример `worker.example.toml` как `worker.toml`, затем отредактируйте локальную копию. Оставьте `token = ""` до шага выдачи токена. В примере уже есть один комплект секций; не добавляйте дублирующие `[codex]`, `[claude]` и другие TOML-секции.
 
 Оставьте постоянными имя и путь `work_dir`, например `C:\studlance\jobs`. Подпапка `<work_dir>\<job_id>` содержит состояние, идентификаторы CLI-сессий, логи и снимки. Не очищайте её при обновлении. Путь Poppler задайте абсолютным, например `C:\studlance\poppler\bin\pdftoppm.exe`. TOML-пути с пробелами заключайте в одинарные кавычки; все Windows-команды с путями ниже передают каждый путь как отдельный заключённый в кавычки аргумент.
 
@@ -185,9 +216,24 @@ Office и КОМПАС используются через COM. Запускай
 
 1. Создайте задание `Studlance server`. На вкладке **Общие** выберите пользователя `studlance` и **Выполнять только для вошедшего пользователя**. На вкладке **Триггеры** добавьте **При входе в систему** этого пользователя.
 2. На вкладке **Действия** укажите программу `C:\studlance\server\studlance-server.exe`, аргументы `serve --data "C:\studlance\server\data" --addr "127.0.0.1:8080"`, поле **Начать в** — `C:\studlance\server`.
-3. В **Параметрах** выберите для уже выполняющегося задания **Не запускать новый экземпляр**. Включите перезапуск при сбое, например раз в минуту не более трёх раз. Не задавайте пароль в аргументах или скрипте.
-4. Аналогично создайте `Studlance worker` для `studlance`, **Выполнять только для вошедшего пользователя**, с триггером при входе в систему и задержкой запуска 1 минута. Программа: `C:\studlance\worker\studlance-worker.exe`; аргументы: `serve --config "C:\studlance\worker\worker.toml"`; поле **Начать в**: `C:\studlance\worker`. В параметрах также установите **Не запускать новый экземпляр** и восстановление после сбоя.
-5. Перезайдите под `studlance`, проверьте `/healthz`, затем online воркер в `/admin`. Если сервер ещё не готов, воркер сам повторяет сетевое подключение с увеличивающейся задержкой. На обычном запуске одновременно не запускайте ручной экземпляр и плановое задание.
+3. На вкладке **Параметры** выберите **Не запускать новый экземпляр** и включите перезапуск при сбое, например раз в минуту не более трёх раз. Для постоянного сервера снимите флажок **Останавливать задачу, выполняемую дольше…**: значение `ExecutionTimeLimit` должно быть неограниченным (`PT0S`), иначе стандартный лимит Планировщика остановит задание через 72 часа. Перезапуск при сбое этот лимит не отменяет. Не задавайте пароль в аргументах или скрипте.
+4. Аналогично создайте `Studlance worker` для `studlance`, **Выполнять только для вошедшего пользователя**, с триггером при входе в систему и задержкой запуска 1 минута. Программа: `C:\studlance\worker\studlance-worker.exe`; аргументы: `serve --config "C:\studlance\worker\worker.toml"`; поле **Начать в**: `C:\studlance\worker`. В параметрах также выберите **Не запускать новый экземпляр**, включите восстановление после сбоя и снимите **Останавливать задачу, выполняемую дольше…**; для неё тоже проверьте `ExecutionTimeLimit = PT0S`.
+5. После создания обоих заданий их настройки можно сверить в UI или прочитать командой ниже. `Get-ScheduledTask` ничего не меняет; у обоих заданий в колонке `ExecutionTimeLimit` должно быть `PT0S`, а `MultipleInstances` — `IgnoreNew`.
+
+   ```powershell
+   Get-ScheduledTask -TaskName 'Studlance server','Studlance worker' | ForEach-Object {
+       [pscustomobject]@{
+           TaskName = $_.TaskName
+           ExecutionTimeLimit = $_.Settings.ExecutionTimeLimit
+           MultipleInstances = $_.Settings.MultipleInstances
+           DisallowStartIfOnBatteries = $_.Settings.DisallowStartIfOnBatteries
+           StopIfGoingOnBatteries = $_.Settings.StopIfGoingOnBatteries
+       }
+   } | Format-Table -AutoSize
+   ```
+
+   На вкладке **Условия** стандартные параметры питания могут запрещать запуск от батареи или останавливать задачу при переходе на неё (`DisallowStartIfOnBatteries` / `StopIfGoingOnBatteries`). Для постоянно работающего компьютера, подключённого к сети/ИБП, владелец может оставить эти ограничения и обеспечить питание. Если воркер и сервер должны продолжать работу также от батареи, снимите оба соответствующих флажка в UI; учитывайте расход заряда. Выберите подходящий режим вручную — инструкция не меняет параметры питания компьютера.
+6. Перезайдите под `studlance`, проверьте `/healthz`, затем online воркер в `/admin`. Если сервер ещё не готов, воркер сам повторяет сетевое подключение с увеличивающейся задержкой. На обычном запуске одновременно не запускайте ручной экземпляр и плановое задание.
 
 При остановке выключите оба задания в Планировщике, чтобы они не стартовали повторно. Для штатной остановки работающего воркера нажмите `Ctrl+C`, дождитесь выхода, затем нажмите `Ctrl+C` в окне сервера. Не завершайте все процессы Office или КОМПАС по имени: другие окна и несохранённые документы могут принадлежать пользователю. Если применяется собственный PowerShell-helper для фонового запуска, задавайте ему скрытое окно (`-WindowStyle Hidden`); не добавляйте пароль в helper.
 
