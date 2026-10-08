@@ -1,27 +1,33 @@
+# Рабочий профиль одного постоянного Windows-воркера.
+# server_url должен совпадать с origin в браузере (включая схему, имя и порт).
 server_url = "http://127.0.0.1:8080"
-token = ""                        # выдаёт studlance-server worker token --name pc-1
+# Вставьте сюда значение, которое worker token напечатал один раз.
+# В публичный репозиторий, общий конфиг и логи секрет не помещать.
+token = ""
+# Стабильное имя связано с выданным token и worker ID в серверной базе.
 name = "pc-1"
+# Постоянная папка: не очищать при обновлении или перезапуске.
 work_dir = 'C:\studlance\jobs'
+# Полный путь к pdftoppm.exe. Пустое значение использует PATH.
 pdftoppm = 'C:\studlance\poppler\bin\pdftoppm.exe'
 
 [codex]
+# Имя команды в PATH либо полный путь к CLI.
 command = "codex"
+# Дополнительные аргументы CLI; протокольные аргументы добавляет воркер.
 args = []
-
-# Для локальной проверки без настоящих агентов — фейковые из cmd/fakeagent
-# (маркеры в тексте запроса: #ask, #fail-once, #fail-verify, #hang, #no-pdf):
-# [codex]
-# command = 'C:\studlance\fakeagent.exe'
-# args = ["codex"]
 
 [claude]
 command = "claude"
 args = []
 
 [timeouts]
+# Лимит одного этапа, отсчитывается от сохранённого времени старта этапа.
 stage = "3h"
+# Период heartbeat и продления lease.
 heartbeat = "15s"
 
 [capabilities]
+# Ручные добавления/исключения обнаруженных возможностей.
 extra = []
 disable = []
