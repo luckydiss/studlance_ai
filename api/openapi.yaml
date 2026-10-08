@@ -447,6 +447,33 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/admin/jobs/{id}/input/{path}:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Точный путь файла из AdminInputFile (один сегмент, %2F для вложенности)
+    get:
+      tags: [admin]
+      operationId: adminGetInput
+      summary: Скачать исходник или вложение доработки
+      responses:
+        "200":
+          description: Файл
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/admin/jobs/{id}/runs/{run_id}/steps:
     parameters:
       - $ref: "#/components/parameters/JobId"
@@ -1646,6 +1673,21 @@ components:
         size:
           type: integer
 
+    AdminInputFile:
+      type: object
+      description: |
+        Файл заказа (исходник или вложение доработки) для пульта. revision
+        берётся из метаданных записи файла: 0 — исходник, n — вложение
+        доработки n (не вычисляется по имени папки пути).
+      required: [path, size, revision]
+      properties:
+        path:
+          type: string
+        size:
+          type: integer
+        revision:
+          type: integer
+
     PlannedDocument:
       type: object
       required: [title, kind]
@@ -1863,7 +1905,7 @@ components:
             input_files:
               type: array
               items:
-                $ref: "#/components/schemas/InputFile"
+                $ref: "#/components/schemas/AdminInputFile"
             versions:
               type: array
               items:

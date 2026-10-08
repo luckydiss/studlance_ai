@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+// longTraceSteps is the size of the #longtrace draft trace: enough to force
+// several HTTP pages of 500 steps and a bounded DOM in the panel.
+const longTraceSteps = 2000
+
 // runCodex imitates `codex exec --json`: the draft stage.
 func runCodex(cfg *config) int {
 	if cfg.markers["#hang"] {
@@ -41,6 +45,20 @@ func runCodex(cfg *config) int {
 
 	if cfg.markers["#slow"] {
 		time.Sleep(5 * time.Second)
+	}
+
+	if cfg.markers["#longtrace"] {
+		// A long, complete trace: many JSONL steps so the panel's history
+		// paging, filtering and bounded DOM can be exercised (08-web-admin.md).
+		// Keep a short streaming cadence so the same real scenario can verify
+		// both live SSE delivery and the completed HTTP history pages.
+		em.delay = time.Millisecond
+		for i := 1; i <= longTraceSteps; i++ {
+			em.emit(codexItem(fmt.Sprintf("item_%d", i), "reasoning", map[string]any{
+				"text": fmt.Sprintf("Шаг %d: проверяем элемент расчёта номер %d", i, i),
+			}))
+		}
+		em.delay = time.Duration(lineDelayMs) * time.Millisecond
 	}
 
 	cwd, err := os.Getwd()

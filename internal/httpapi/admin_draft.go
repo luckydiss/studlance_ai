@@ -33,6 +33,10 @@ func (resp blobResponse) serve(w http.ResponseWriter) error {
 	return nil
 }
 
+func (resp blobResponse) VisitAdminGetInputResponse(w http.ResponseWriter) error {
+	return resp.serve(w)
+}
+
 func (resp blobResponse) VisitAdminGetDraftFileResponse(w http.ResponseWriter) error {
 	return resp.serve(w)
 }

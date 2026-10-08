@@ -31,7 +31,7 @@ const lineDelayMs = 30
 
 // knownMarkers are the behavior markers recognized in the prompt text.
 var knownMarkers = []string{
-	"#ask", "#fail-draft", "#fail-verify", "#fail-verify-once", "#fail-verify-twice", "#fail-once", "#hang", "#slow", "#no-pdf", "#longline",
+	"#ask", "#fail-draft", "#fail-verify", "#fail-verify-once", "#fail-verify-twice", "#fail-once", "#hang", "#slow", "#no-pdf", "#longline", "#longtrace",
 }
 
 // script is the parsed FAKEAGENT_SCRIPT environment variable.
