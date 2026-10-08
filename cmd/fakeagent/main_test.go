@@ -197,6 +197,35 @@ func TestCodexResumeKeepsThreadID(t *testing.T) {
 	}
 }
 
+func TestCodexLongTraceKeepsAllSyntheticSteps(t *testing.T) {
+	dir := t.TempDir()
+	stdout, code := runAgent(t, dir, "Синтетическая работа #longtrace", nil, codexArgs...)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	var longSteps int
+	for _, ev := range parseJSONL(t, stdout) {
+		if ev["type"] != "item.completed" {
+			continue
+		}
+		item, ok := ev["item"].(map[string]any)
+		if !ok || item["item_type"] != "reasoning" {
+			continue
+		}
+		fields, _ := item["text"].(string)
+		if strings.HasPrefix(fields, "Шаг ") {
+			longSteps++
+		}
+	}
+	if longSteps != longTraceSteps {
+		t.Fatalf("synthetic long-trace steps = %d, want %d", longSteps, longTraceSteps)
+	}
+	if findEvent(parseJSONL(t, stdout), "turn.completed") == nil {
+		t.Fatal("long trace did not finish normally")
+	}
+	checkManifest(t, dir, true)
+}
+
 // prepareDraft runs a normal codex draft in dir.
 func prepareDraft(t *testing.T, dir string) {
 	t.Helper()

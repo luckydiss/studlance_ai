@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/luckydiss/studlance_ai/internal/auth"
+	"github.com/luckydiss/studlance_ai/internal/jobs"
 	"github.com/luckydiss/studlance_ai/internal/store"
 )
 
@@ -56,6 +57,55 @@ func (s *Server) AdminGetJob(ctx context.Context, request AdminGetJobRequestObje
 		return nil, dErr
 	}
 	return AdminGetJob200JSONResponse(detail), nil
+}
+
+// AdminGetInput implements GET /api/admin/jobs/{id}/input/{path}: download a
+// source file or a revision attachment of exactly this job. The path is the
+// exact value from AdminInputFile; only kind=input records are served, so a
+// storage key, another job's file or a revision crop is never exposed
+// (04-api.md, 08-web-admin.md).
+func (s *Server) AdminGetInput(ctx context.Context, request AdminGetInputRequestObject) (AdminGetInputResponseObject, error) {
+	if denied, unauth := s.adminAuth(ctx, requestFrom(ctx)); denied {
+		if unauth {
+			return AdminGetInput401JSONResponse{errUnauthorized()}, nil
+		}
+		return AdminGetInput403JSONResponse{errForbidden()}, nil
+	}
+	jobID := string(request.Id)
+	if _, err := s.store.JobByID(ctx, jobID); err != nil {
+		return AdminGetInput404JSONResponse{errNotFound()}, nil
+	}
+	path, err := jobs.NormalizePath(request.Path)
+	// The admin URL must identify the exact path shown by AdminInputFile.
+	// NormalizePath is intentionally forgiving for uploads (for example it
+	// folds backslashes and leading slashes), so reject any request that would
+	// otherwise be canonicalized into a different stored path.
+	if err != nil || path != request.Path {
+		return AdminGetInput404JSONResponse{errNotFound()}, nil
+	}
+	file, ok := s.adminInputFile(ctx, jobID, path)
+	if !ok {
+		return AdminGetInput404JSONResponse{errNotFound()}, nil
+	}
+	rc, _, oErr := s.blobs.Open(ctx, file.BlobKey)
+	if oErr != nil {
+		return AdminGetInput404JSONResponse{errNotFound()}, nil
+	}
+	return blobResponse{body: rc, req: requestFrom(ctx), contentType: "application/octet-stream", downloadName: file.Path}, nil
+}
+
+// adminInputFile finds an input record of the job by its exact stored path.
+func (s *Server) adminInputFile(ctx context.Context, jobID, path string) (store.File, bool) {
+	files, err := s.store.FilesByJob(ctx, jobID)
+	if err != nil {
+		return store.File{}, false
+	}
+	for _, f := range files {
+		if f.Kind == store.FileInput && f.Path == path {
+			return f, true
+		}
+	}
+	return store.File{}, false
 }
 
 // AdminGetRunSteps implements GET /api/admin/jobs/{id}/runs/{run_id}/steps.

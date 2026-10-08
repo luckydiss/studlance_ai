@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,7 +91,11 @@ func serve(ctx context.Context, cfg config.Server) error {
 			apiHandler.ServeHTTP(w, r)
 		case r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/"):
 			if !isAdminRequest(r, authSvc) {
-				http.Redirect(w, r, "/login", http.StatusFound)
+				// Keep the requested panel address as the login return path:
+				// the login page (client SPA) validates it as local and, for an
+				// admin account, returns to it (08-web-admin.md).
+				next := url.QueryEscape(r.URL.RequestURI())
+				http.Redirect(w, r, "/login?next="+next, http.StatusFound)
 				return
 			}
 			staticHandler.ServeHTTP(w, r)

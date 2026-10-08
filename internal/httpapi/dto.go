@@ -63,7 +63,7 @@ func (s *Server) adminJobDetail(ctx context.Context, j store.Job) (AdminJobDetai
 		Prompt:           j.Prompt,
 		Question:         j.Question,
 		StatusSteps:      s.statusSteps(ctx, j),
-		InputFiles:       []InputFile{},
+		InputFiles:       []AdminInputFile{},
 		Versions:         []Version{},
 		PlannedDocuments: []PlannedDocument{},
 		Revisions:        []Revision{},
@@ -99,12 +99,20 @@ func (s *Server) adminJobDetail(ctx context.Context, j store.Job) (AdminJobDetai
 		_ = json.Unmarshal([]byte(j.State), &detail.State)
 	}
 
-	input, err := s.store.InputFiles(ctx, j.ID)
+	// The admin sees the source files and the revision attachments with the
+	// revision number from the file record (files.version: 0 source, n the
+	// target revision), not guessed from the path prefix (04-api.md, 08).
+	files, err := s.store.FilesByJob(ctx, j.ID)
 	if err != nil {
 		return AdminJobDetail{}, err
 	}
-	for _, f := range input {
-		detail.InputFiles = append(detail.InputFiles, InputFile{Path: f.Path, Size: int(f.Size)})
+	for _, f := range files {
+		if f.Kind != store.FileInput {
+			continue
+		}
+		detail.InputFiles = append(detail.InputFiles, AdminInputFile{
+			Path: f.Path, Size: int(f.Size), Revision: int(f.Version),
+		})
 	}
 
 	versions, err := s.versionViews(ctx, j, true)

@@ -19,7 +19,14 @@ export { api } from "./api/client";
 export type { ApiClient, paths, components, operations } from "./api/client";
 
 export { formatDate, formatOrderDate, formatBytes, plural } from "./format";
-export { safeNextPath, inputUploadUrl, bundleUrl, jobStreamUrl } from "./paths";
+export {
+  adminInputUrl,
+  adminJobStreamUrl,
+  bundleUrl,
+  inputUploadUrl,
+  jobStreamUrl,
+  safeNextPath,
+} from "./paths";
 export { ApiError, apiErrorMessage, apiErrorStatus, throwApiError } from "./errors";
 export { ToastProvider, useToast, useApiErrorToast } from "./toast";
 export {

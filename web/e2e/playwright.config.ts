@@ -15,6 +15,6 @@ export default defineConfig({
     screenshot: "only-on-failure",
     trace: "off",
   },
-  outputDir: "./.artifacts/test-results",
+  outputDir: process.env.PR6_TEST_OUTPUT_DIR ?? "./.artifacts/test-results",
   globalSetup: "./global-setup.mjs",
 });

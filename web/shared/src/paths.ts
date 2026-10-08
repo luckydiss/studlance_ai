@@ -39,3 +39,16 @@ export function bundleUrl(jobId: string, version: number): string {
 export function jobStreamUrl(jobId: string): string {
   return `/api/client/jobs/${encodeURIComponent(jobId)}/stream`;
 }
+
+/** SSE stream URL of an admin job (08-web-admin.md). */
+export function adminJobStreamUrl(jobId: string): string {
+  return `/api/admin/jobs/${encodeURIComponent(jobId)}/stream`;
+}
+
+/**
+ * Admin download URL of an input file or revision attachment. The path is
+ * encoded as a single URL segment (%2F for nesting) per 04-api.md.
+ */
+export function adminInputUrl(jobId: string, path: string): string {
+  return `/api/admin/jobs/${encodeURIComponent(jobId)}/input/${encodeURIComponent(path)}`;
+}

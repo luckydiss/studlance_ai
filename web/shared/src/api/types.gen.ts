@@ -352,6 +352,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/jobs/{id}/input/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["JobId"];
+                /** @description Точный путь файла из AdminInputFile (один сегмент, %2F для вложенности) */
+                path: string;
+            };
+            cookie?: never;
+        };
+        /** Скачать исходник или вложение доработки */
+        get: operations["adminGetInput"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/jobs/{id}/runs/{run_id}/steps": {
         parameters: {
             query?: {
@@ -1155,6 +1176,15 @@ export interface components {
             path: string;
             size: number;
         };
+        /** @description Файл заказа (исходник или вложение доработки) для пульта. revision
+         *     берётся из метаданных записи файла: 0 — исходник, n — вложение
+         *     доработки n (не вычисляется по имени папки пути).
+         *      */
+        AdminInputFile: {
+            path: string;
+            size: number;
+            revision: number;
+        };
         PlannedDocument: {
             title: string;
             kind: string;
@@ -1240,7 +1270,7 @@ export interface components {
             prompt: string;
             question?: string;
             status_steps: components["schemas"]["StatusStep"][];
-            input_files: components["schemas"]["InputFile"][];
+            input_files: components["schemas"]["AdminInputFile"][];
             versions: components["schemas"]["Version"][];
             planned_documents: components["schemas"]["PlannedDocument"][];
             revisions: components["schemas"]["Revision"][];
@@ -2082,6 +2112,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminJobDetail"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    adminGetInput: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["JobId"];
+                /** @description Точный путь файла из AdminInputFile (один сегмент, %2F для вложенности) */
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Файл */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
                 };
             };
             401: components["responses"]["Unauthorized"];
