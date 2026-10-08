@@ -749,21 +749,37 @@ test("admin shows a real client remark on its source version and the matching sh
   // The real fake-agent output includes a saved draft snapshot even after v1.
   // Force the documented no-draft detail shape so this route change exercises
   // the exact edge where an old draft jump could select an empty document set.
-  let noDraftFixtureServed = false;
-  await page.route(`**/api/admin/jobs/${plainJobId}`, async (route) => {
-    if (new URL(route.request().url()).pathname !== `/api/admin/jobs/${plainJobId}`) {
-      await route.continue();
-      return;
-    }
-    const response = await route.fetch();
-    const body = (await response.json()) as Record<string, unknown>;
-    await route.fulfill({ response, json: { ...body, draft: null } });
-    noDraftFixtureServed = true;
+  let plainDetailFixture: Record<string, unknown> | undefined;
+  await page.context().route(
+    (url) => url.pathname === `/api/admin/jobs/${plainJobId}`,
+    async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as Record<string, unknown>;
+      plainDetailFixture = { ...body, draft: null };
+      await route.fulfill({ response, json: { ...body, draft: null } });
+    },
+  );
+  await page.context().route(
+    (url) => url.pathname === `/api/admin/jobs/${plainJobId}/stream`,
+    (route) => route.abort("failed"),
+  );
+  const plainDetailResponsePromise = page.waitForResponse((response) => {
+    const request = response.request();
+    return (
+      request.method() === "GET" &&
+      new URL(response.url()).pathname === `/api/admin/jobs/${plainJobId}`
+    );
   });
-  await page.route(`**/api/admin/jobs/${plainJobId}/stream`, (route) => route.abort("failed"));
   await navigateBetweenAdminCards(page, plainJobId);
-  const plainAdminDetail = await waitForAdminDetail(page, plainJobId);
-  expect(noDraftFixtureServed).toBe(true);
+  const browserPlainDetailResponse = await plainDetailResponsePromise;
+  expect(browserPlainDetailResponse.ok()).toBeTruthy();
+  const plainAdminDetail = (await browserPlainDetailResponse.json()) as {
+    title: string;
+    status: string;
+    draft: unknown;
+  };
+  expect(plainDetailFixture).toBeTruthy();
+  expect(plainAdminDetail.draft).toBeNull();
   await expect(page.getByRole("heading", { name: plainAdminDetail.title })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Версия 1" })).toHaveAttribute(
     "aria-selected",

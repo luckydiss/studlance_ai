@@ -1,6 +1,6 @@
 # PR 6 — завершение пульта, 2026-10-08
 
-Статус: локальная реализация и приёмочные проверки завершены; PR опубликован, CI ожидается. Слияние требует отдельной команды владельца.
+Статус: PR #6 открыт; финальные локальные проверки завершены. Первичный CI выявил ненадёжную проверку тестовой маршрутизации, исправление подтверждено отдельным и полным браузерными прогонами; CI на обновлённом head ожидается. Слияние требует отдельной команды владельца.
 
 Незавершённая реализация сохранена и продолжена в изолированном checkout. Исходные изменения не потеряны. Реализованы маршруты пульта, заказы и фильтры, разбор заказа, история и live-события, документы и замечания, действия администратора, клиенты и воркеры.
 
@@ -8,13 +8,13 @@
 
 - Admin GET исходника проверяет роль, заказ и точную запись `kind=input`, отдаёт сохранённый blob потоково. Номер доработки берётся из `files.version`, а не имени файла. Контракт и сгенерированные Go/TypeScript обновлены.
 - Переход из пульта на общий вход после текущего 401 переносит `reauth=1`: это только указание показать форму, без изменения серверной авторизации. Успешный `/me` не отменяет повторный вход. Возврат администратора в пульт выполняется полной навигацией между SPA.
-- Автоматический повтор admin query исключает 401/403/404 и ошибки прежней сессии. Текущий 401 сразу завершает локальную сессию; единственный повтор разрешён для сети и 5xx. Обнаруженный браузерным тестом дефект с поглощением разового 401 исправлен и независимо проверен по коду; повторный браузерный прогон ожидается.
+- Автоматический повтор admin query исключает 401/403/404 и ошибки прежней сессии. Текущий 401 сразу завершает локальную сессию; единственный повтор разрешён для сети и 5xx. Обнаруженный браузерным тестом дефект с поглощением разового 401 исправлен и проверен targeted и полным браузерными прогонами.
 - Загрузка истории сериализована. При смене набора запусков ожидающий добор выполняется из `finally`, в том числе после отмены предыдущего эффекта; прежние callbacks не записывают данные новой карточки.
 - Длинная история сохраняется в памяти, отображаемый список ограничен 200 строками; HTTP-курсор отделён от live-пачек.
 
 ## Проверки на текущем дереве
 
-Независимые ревью API и интерфейса проведены. Найденная гонка истории исправлена и повторно проверена по коду. Финальные браузерные доказательства ещё ожидаются.
+Независимые ревью API и интерфейса проведены. Найденная гонка истории исправлена и проверена браузерными тестами. Первый CI Web e2e на исходном head поймал ненадёжный тестовый маршрут no-draft fixture; маршрут переведён на context-level matcher, а тест теперь проверяет фактический ответ браузерного GET. Targeted и полный локальный повтор на исправленном дереве прошли; новый CI запуск ожидается после публикации test-only фикса.
 
 | Проверка | Результат |
 |---|---|
@@ -26,10 +26,11 @@
 | Go unit | `go test -count=1 ./...` exit 0 после финального web build; все пакеты прошли |
 | Go e2e с Poppler | 12 pass, 0 fail, 0 skip |
 | Генерация Go и TypeScript | два запуска, файлы не изменились |
-| Playwright | полный прогон `--workers=1`: 44 pass (25 PR5 + 19 PR6), 0 fail, 0 skip |
-| 2 000 шагов | 2 004 шага, 5 HTTP страниц, последняя seq 2 004, DOM ограничен 200 строками, фильтр 26 ms |
+| Playwright | полный прогон `--workers=1` после фикса fixture: 44 pass (25 PR5 + 19 PR6), 0 fail, 0 skip; 12.3 min |
+| 2 000 шагов | 2 004 шага, 5 HTTP страниц, последняя seq 2 004, DOM ограничен 200 строками, фильтр 23 ms |
 | 390 px | нет горизонтального переполнения; проверено, что trace заканчивается до начала SheetsPanel, внутренний список прокручивается отдельно |
-| CI | ожидается после публикации PR |
+| CI на исходном head | Web, Generate, Windows build, Go и Go e2e прошли; Web e2e упал только на старой проверке `noDraftFixtureServed` |
+| CI на исправленном head | ожидается после push test-only фикса |
 | Скриншоты | synthetic admin review сохранён в 390 px и 1440 px; mockup оставлен без изменений |
 
 Локальные Go-прогоны выполнены на Go 1.26.8 с `CGO_ENABLED=0`, без race detector. Проверка `-race` должна быть подтверждена CI. Raw логи, исходный снимок и локальные пути хранятся вне публичного репозитория. Данные для браузерных сценариев синтетические.
@@ -44,4 +45,4 @@ The combined order-filter test passes with the exact client id, email query, fai
 
 At narrow widths, the desktop panel flex-grow values had caused the trace to shrink while the sheets panel occupied the same vertical space. The ≤1120 px layout now gives each panel intrinsic height and caps the trace steps scroller at 420 px. The 390 px browser regression compares the trace/sheets bounding boxes and verifies that the step list scrolls within its own panel. The final screenshot shows SheetsPanel below the complete trace panel.
 
-Raw logs and screenshots are stored outside the repository in the review artifact directory. They include web lint/unit/build, post-build Go vet/unit, the complete 44-test Playwright run, targeted race regressions, and 390/1440 screenshots. The full Playwright run was `pnpm exec playwright test --workers=1` with 44 pass, 0 fail, 0 skip. Go checks used Go 1.26.8 with CGO disabled; race detector and Windows CI remain to be confirmed by CI. No production code changed after the final build and test run.
+Raw logs and screenshots are stored outside the repository in the review artifact directory. They include web lint/unit/build, post-build Go vet/unit, the complete 44-test Playwright run, targeted race regressions, and 390/1440 screenshots. After the browser-route fixture update, the targeted test passed 1/1 and the clean full Playwright run `pnpm exec playwright test --workers=1` passed 44/44 with no skips. The route update is test-only; production code and the final web build are unchanged. Go checks used Go 1.26.8 with CGO disabled; race detector was not run locally. CI status must be checked again on the updated PR head.
