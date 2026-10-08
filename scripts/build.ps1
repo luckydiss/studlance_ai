@@ -1,10 +1,7 @@
-# Builds studlance-server.exe and studlance-worker.exe on Windows.
+# Builds a complete Windows release pair, including both embedded SPAs.
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/build.ps1
-# Optional: -SkipWeb to skip the frontend build.
 
-param(
-    [switch]$SkipWeb
-)
+param([string]$SmokeRoot)
 
 $ErrorActionPreference = "Stop"
 
@@ -14,26 +11,45 @@ Set-Location -LiteralPath $Root
 $Bin = Join-Path $Root "bin"
 New-Item -ItemType Directory -Force -Path $Bin | Out-Null
 
-if (-not $SkipWeb) {
-    Push-Location (Join-Path $Root "web")
-    try {
-        pnpm install
-        if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
-        pnpm build
-        if ($LASTEXITCODE -ne 0) { throw "pnpm build failed" }
-    }
-    finally {
-        Pop-Location
-    }
+$NodeVersion = (node --version).Trim()
+if ($LASTEXITCODE -ne 0 -or $NodeVersion -notmatch '^v22\.') { throw "Node.js 22 is required (found '$NodeVersion')" }
+
+Push-Location (Join-Path $Root "web")
+try {
+    $PnpmVersion = (pnpm --version).Trim()
+    if ($LASTEXITCODE -ne 0 -or $PnpmVersion -ne "9.15.0") { throw "pnpm 9.15.0 is required (found '$PnpmVersion')" }
+    pnpm install --frozen-lockfile
+    if ($LASTEXITCODE -ne 0) { throw "pnpm install --frozen-lockfile failed ($LASTEXITCODE)" }
+    pnpm build
+    if ($LASTEXITCODE -ne 0) { throw "pnpm build failed ($LASTEXITCODE)" }
+}
+finally {
+    Pop-Location
 }
 
-$env:GOOS = "windows"
-$env:GOARCH = "amd64"
-go build -o (Join-Path $Bin "studlance-server.exe") ./cmd/server
-if ($LASTEXITCODE -ne 0) { throw "go build server failed" }
-go build -o (Join-Path $Bin "studlance-worker.exe") ./cmd/worker
-if ($LASTEXITCODE -ne 0) { throw "go build worker failed" }
+$OldGOOS = $env:GOOS
+$OldGOARCH = $env:GOARCH
+try {
+    $env:GOOS = "windows"
+    $env:GOARCH = "amd64"
+    go build -o (Join-Path $Bin "studlance-server.exe") ./cmd/server
+    if ($LASTEXITCODE -ne 0) { throw "go build server failed ($LASTEXITCODE)" }
+    go build -o (Join-Path $Bin "studlance-worker.exe") ./cmd/worker
+    if ($LASTEXITCODE -ne 0) { throw "go build worker failed ($LASTEXITCODE)" }
+}
+finally {
+    $env:GOOS = $OldGOOS
+    $env:GOARCH = $OldGOARCH
+}
 
-Write-Host "Built:"
+if ([string]::IsNullOrWhiteSpace($SmokeRoot)) {
+    & (Join-Path $Root "scripts/smoke-windows.ps1") -BinDir $Bin
+}
+else {
+    & (Join-Path $Root "scripts/smoke-windows.ps1") -BinDir $Bin -SmokeRoot $SmokeRoot
+}
+if ($LASTEXITCODE -ne 0) { throw "Windows packaged smoke failed ($LASTEXITCODE)" }
+
+Write-Host "Complete Windows package built and smoke-tested:"
 Write-Host "  $Bin\studlance-server.exe"
 Write-Host "  $Bin\studlance-worker.exe"
